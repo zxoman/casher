@@ -1,0 +1,715 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الفواتير - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>📋 الفواتير السابقة</h2>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#f39c12,#e67e22);padding:10px 14px;border-radius:8px;color:#fff;text-align:center">
+          <div style="font-size:12px;opacity:.9">💰 نقدي</div>
+          <div style="font-size:20px;font-weight:bold" id="invDrawerCash">0</div>
+        </div>
+        <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#3498db,#2980b9);padding:10px 14px;border-radius:8px;color:#fff;text-align:center">
+          <div style="font-size:12px;opacity:.9">📱 فودافون كاش</div>
+          <div style="font-size:20px;font-weight:bold" id="invDrawerVodafone">0</div>
+        </div>
+        <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#2ecc71,#27ae60);padding:10px 14px;border-radius:8px;color:#fff;text-align:center">
+          <div style="font-size:12px;opacity:.9">🏦 انستاباي</div>
+          <div style="font-size:20px;font-weight:bold" id="invDrawerInstapay">0</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="search-bar" style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="searchInvoice" placeholder="بحث برقم الفاتورة أو العميل أو اسم المنتج أو الباركود..." oninput="loadInvoices()" style="flex:1;min-width:200px">
+          <select id="filterCategory" onchange="loadInvoices()" style="min-width:140px;padding:6px;border:1px solid #ccc;border-radius:6px;font-size:13px;"><option value="">كل التصنيفات</option></select>
+          <input type="date" id="filterDate" onchange="loadInvoices()">
+          <button class="btn btn-sm" onclick="document.getElementById('filterDate').value='';document.getElementById('filterCategory').value='';loadInvoices()">مسح الفلتر</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>رقم الفاتورة</th>
+                <th>العميل</th>
+                <th>عدد المنتجات</th>
+                <th>الإجمالي</th>
+                <th>الخصم</th>
+                <th>المدفوع</th>
+                <th>المتبقي</th>
+                <th>طريقة الدفع</th>
+                <th>التاريخ</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="invoicesTable"></tbody>
+          </table>
+        </div>
+        <div id="noInvoices" style="text-align:center;padding:32px;color:var(--text-secondary);display:none">لا توجد فواتير</div>
+        <div id="invoicesPager" style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;padding:12px 0 4px"></div>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="invoiceModal" style="display:none">
+    <div class="modal" style="max-width:700px">
+      <h2 id="invoiceModalTitle">تفاصيل الفاتورة</h2>
+      <div id="invoiceDetails"></div>
+      <button type="button" class="btn" style="background:var(--border);margin-top:12px" onclick="closeModal()">إغلاق</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="editInvoiceModal" style="display:none">
+    <div class="modal" style="max-width:500px">
+      <h2>تعديل الفاتورة</h2>
+      <div class="form-group">
+        <label>العميل</label>
+        <select id="editCustomer" style="width:100%"><option value="">بدون عميل</option></select>
+      </div>
+      <div class="form-group">
+        <label>الخصم</label>
+        <input type="number" id="editDiscount" class="form-control" step="0.01" min="0">
+      </div>
+      <div class="form-group">
+        <label>طريقة الدفع</label>
+        <select id="editMethod" style="width:100%">
+          <option value="cash">نقدي</option>
+          <option value="vodafone">فودافون كاش</option>
+          <option value="instapay">انستاباي</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>المبلغ المدفوع</label>
+        <input type="number" id="editPaid" class="form-control" step="0.01" min="0">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary" onclick="saveInvoice()">حفظ</button>
+        <button class="btn" style="background:var(--border)" onclick="document.getElementById('editInvoiceModal').style.display='none'">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/pager.js"></script>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let invoiceContainerLinks = {};
+
+    async function loadInvoiceCompositions() {
+      invoiceContainerLinks = {};
+      const links = await window.api.db.all("SELECT * FROM product_compositions");
+      for (const l of links) invoiceContainerLinks[l.container_id] = { unitId: l.unit_id, unitsPerContainer: l.units_per_container };
+    }
+
+    async function syncInvoiceContainerStock(unitId) {
+      for (const cid of Object.keys(invoiceContainerLinks)) {
+        const link = invoiceContainerLinks[cid];
+        if (link.unitId === unitId) {
+          const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [unitId]);
+          const derived = Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer);
+          await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, cid]);
+        }
+      }
+    }
+
+    async function adjustInvoiceStock(productId, qtyDelta) {
+      const link = invoiceContainerLinks[productId];
+      if (link) {
+        await window.api.db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [qtyDelta * link.unitsPerContainer, link.unitId]);
+        await syncInvoiceContainerStock(link.unitId);
+      } else {
+        await window.api.db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [qtyDelta, productId]);
+        await syncInvoiceContainerStock(productId);
+      }
+    }
+
+    async function loadDrawerBalance() {
+      const bal = await window.api.cash.getBalance();
+      document.getElementById('invDrawerCash').textContent = bal.drawer_cash.toLocaleString();
+      document.getElementById('invDrawerVodafone').textContent = bal.drawer_vodafone.toLocaleString();
+      document.getElementById('invDrawerInstapay').textContent = bal.drawer_instapay.toLocaleString();
+    }
+
+    // Shortest typed digit string that may fuzzily match a barcode. Below this
+    // it is treated as an invoice id/number only.
+    const BARCODE_PARTIAL_MIN = 4;
+    // One page of the list. Rendering every invoice at once cost ~61s of DOM work
+    // at 10k rows, so the page is bounded and the rest is fetched on demand.
+    const invPager = window.TablePager.create({
+      container: 'invoicesPager', size: 20, label: 'فاتورة',
+      onGo: function () { loadInvoices(); }
+    });
+    function goToInvPage(n) { invPager.go(n); }
+
+    async function loadInvoices() {
+      const q = document.getElementById('searchInvoice').value.trim();
+      const date = document.getElementById('filterDate').value;
+      const catId = document.getElementById('filterCategory').value;
+      // A new search/filter must land on page 1, otherwise you can be sitting on
+      // page 40 of a result set that only has one page.
+      invPager.syncFilter(JSON.stringify([q, date, catId]));
+      // The item summary/count used to be two correlated subqueries, which made
+      // SQLite re-scan sale_items once per invoice. One grouped join does the
+      // whole table in a single pass instead.
+      const AGG = `LEFT JOIN (SELECT si.sale_id, GROUP_CONCAT(p.name || ' x' || si.quantity, '، ') AS products_summary, COUNT(*) AS items_count FROM sale_items si LEFT JOIN products p ON si.product_id = p.id GROUP BY si.sale_id) agg ON agg.sale_id = s.id`;
+      let where = ``;
+      const params = [];
+      if (catId) {
+        where += ` AND s.id IN (SELECT si.sale_id FROM sale_items si JOIN products p ON si.product_id = p.id WHERE p.category_id = ?)`;
+        params.push(catId);
+      }
+      if (q && /^\d+$/.test(q)) {
+        // Barcode first, exactly: a scan sends the whole code and "this product,
+        // every invoice it was on" is the question being asked. Keeping it in its
+        // own subquery stops the barcode test from colliding with s.id.
+        where += ` AND (s.id = ? OR s.invoice_number LIKE ? OR s.id IN (SELECT sale_id FROM sale_items si2 LEFT JOIN products p2 ON si2.product_id = p2.id WHERE p2.name LIKE ?) OR s.id IN (SELECT sale_id FROM sale_items si3 LEFT JOIN products p3 ON si3.product_id = p3.id WHERE p3.barcode = ?)`;
+        params.push(parseInt(q), `%${q}%`, `%${q}%`, q);
+        // Typed-in barcodes are usually partial, but a short digit string is
+        // almost always an invoice id/number. Partial-matching every barcode
+        // would make "3" return the whole book, so only widen from 4 digits up.
+        if (q.length >= BARCODE_PARTIAL_MIN) {
+          where += ` OR s.id IN (SELECT sale_id FROM sale_items si4 LEFT JOIN products p4 ON si4.product_id = p4.id WHERE p4.barcode LIKE ?)`;
+          params.push(`%${q}%`);
+        }
+        where += `)`;
+      } else if (q) {
+        where += ` AND (s.invoice_number LIKE ? OR c.name LIKE ? OR s.id IN (SELECT sale_id FROM sale_items si2 LEFT JOIN products p2 ON si2.product_id = p2.id WHERE p2.name LIKE ? OR p2.barcode LIKE ?))`;
+        params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+      }
+      if (date) {
+        where += ` AND DATE(s.created_at) = ?`;
+        params.push(date);
+      }
+      // total for the pager, same filters (no agg join needed, it filters nothing)
+      const cntSql = `SELECT COUNT(*) AS c FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE 1=1${where}`;
+      const cnt = await window.api.db.get(cntSql, params);
+      const total = (cnt && cnt.c) || 0;
+      invPager.clamp(total);
+      const sql = `SELECT s.*, c.name AS customer_name, c.phone AS customer_phone, agg.products_summary, COALESCE(agg.items_count, 0) AS items_count FROM sales s LEFT JOIN customers c ON s.customer_id = c.id ${AGG} WHERE 1=1${where} ORDER BY s.created_at DESC, s.id DESC LIMIT ? OFFSET ?`;
+      const rows = await window.api.db.all(sql, [...params, invPager.limit, invPager.offset]);
+      const tbody = document.getElementById('invoicesTable');
+      const noDiv = document.getElementById('noInvoices');
+      invPager.render(total);
+      if (rows.length === 0) {
+        tbody.innerHTML = '';
+        noDiv.style.display = 'block';
+        return;
+      }
+      noDiv.style.display = 'none';
+      tbody.innerHTML = rows.map(s => {
+        const remaining = Math.max(0, s.total_amount - s.discount - s.paid_amount);
+        return `<tr>
+          <td><a href="#" onclick="event.preventDefault();showInvoice(${s.id})" style="color:var(--primary);text-decoration:none">${s.invoice_number}</a></td>
+          <td>${s.customer_name || '-'}</td>
+          <td style="font-weight:700;text-align:center">${s.items_count || 0} ${s.products_summary ? `<span style="font-weight:400;font-size:11px;color:var(--text-secondary);cursor:help" title="${s.products_summary}">📦</span>` : '-'}</td>
+          <td>${Number(s.total_amount).toLocaleString()}</td>
+          <td>${Number(s.discount||0).toLocaleString()}</td>
+          <td style="color:var(--success)">${Number(s.paid_amount).toLocaleString()}</td>
+          <td style="color:${remaining>0?'var(--danger)':'inherit'}">${remaining.toLocaleString()}</td>
+          <td>${s.payment_method === 'cash' ? 'نقدي' : s.payment_method === 'vodafone' ? 'فودافون كاش' : s.payment_method === 'instapay' ? 'انستاباي' : s.payment_method}</td>
+          <td>${s.created_at ? new Date(s.created_at + (s.created_at.includes('Z') || s.created_at.includes('+') ? '' : 'Z')).toLocaleString('ar-EG') : s.created_at}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-primary" onclick="printInvoice(${s.id})">🖨️ طباعة</button>
+            ${window.can('invoices','e') ? `<button class="btn btn-sm" onclick="openEditModal(${s.id})" style="background:var(--warning);color:#000">تعديل</button>` : ''}
+            ${window.can('invoices','cancel') ? `<button class="btn btn-sm btn-danger" onclick="deleteInvoice(${s.id})">إلغاء فاتورة</button>` : ''}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function showInvoice(id) {
+      const sale = await window.api.db.get("SELECT s.*, c.name AS customer_name, c.phone AS customer_phone FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE s.id=?", [id]);
+      if (!sale) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
+      const items = await window.api.db.all("SELECT si.*, p.name AS product_name FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
+      const returns = await window.api.db.all("SELECT r.*, p.name AS product_name FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE r.sale_id=?", [id]);
+
+      const allCustomers = await window.api.db.all("SELECT * FROM customers WHERE COALESCE(archived,0)=0 OR id=? ORDER BY name", [sale.customer_id || -1]);
+      window._editingSale = { id: sale.id, items: items.map(i => ({ ...i, _qty: i.quantity, _price: i.price })), invoice: sale.invoice_number, origTotal: sale.total_amount, discount: sale.discount || 0, paid: sale.paid_amount || 0, method: sale.payment_method, customerId: sale.customer_id, customerName: sale.customer_name, customerPhone: sale.customer_phone, createdAt: sale.created_at, remaining_amount: sale.remaining_amount, payment_breakdown: sale.payment_breakdown };
+
+      const remaining = Math.max(0, sale.total_amount - (sale.discount||0) - (sale.paid_amount||0));
+      const custOptions = allCustomers.map(c => `<option value="${c.id}" ${sale.customer_id === c.id ? 'selected' : ''}>${c.name}${c.phone ? ' ('+c.phone+')' : ''}</option>`).join('');
+      let html = `<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:12px;padding:10px;background:var(--card);border-radius:6px">
+        <div style="flex:1;min-width:120px"><strong>رقم الفاتورة:</strong> ${sale.invoice_number}</div>
+        <div style="flex:1;min-width:120px"><strong>العميل:</strong> <select id="editInvCustomer" onchange="updateInvTotals()" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;max-width:180px"><option value="">بدون عميل</option>${custOptions}</select></div>
+        <div style="flex:1;min-width:120px"><strong>التاريخ:</strong> ${sale.created_at ? new Date(sale.created_at + (sale.created_at.includes('Z') || sale.created_at.includes('+') ? '' : 'Z')).toLocaleString('ar-EG') : sale.created_at}</div>
+      </div>`;
+
+      html += `<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
+        <span style="font-weight:700">طريقة الدفع:</span>
+        <select id="editInvMethod" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+          <option value="cash" ${sale.payment_method==='cash'?'selected':''}>نقدي</option>
+          <option value="vodafone" ${sale.payment_method==='vodafone'?'selected':''}>فودافون كاش</option>
+          <option value="instapay" ${sale.payment_method==='instapay'?'selected':''}>انستاباي</option>
+        </select>
+        <span style="font-weight:700;margin-right:8px">الخصم:</span>
+        <input type="number" id="editInvDiscount" value="${sale.discount||0}" step="0.01" min="0" oninput="updateInvTotals()" style="width:80px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+        <span style="font-weight:700;margin-right:8px">المدفوع:</span>
+        <input type="number" id="editInvPaid" value="${sale.paid_amount||0}" step="0.01" min="0" oninput="updateInvTotals()" style="width:100px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+        <span style="font-weight:700;margin-right:8px">المتبقي:</span>
+        <span id="editInvRemaining" style="font-weight:700;font-size:16px;color:${remaining>0?'var(--danger)':'var(--success)'}">${remaining.toLocaleString()}</span>
+      </div>`;
+
+      html += `<h4 style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 4px">
+        <span>🛒 المنتجات</span>
+        <span style="font-size:13px;font-weight:400;color:var(--text-secondary)">المجموع: <span id="editInvTotal">${Number(sale.total_amount).toLocaleString()}</span></span>
+      </h4>
+      <table style="font-size:13px"><thead><tr><th>المنتج</th><th>الكمية</th><th>السعر (الأصلي)</th><th>سعر العرض</th><th>الإجمالي</th><th></th></tr></thead><tbody>`;
+      items.forEach((i, idx) => {
+        const orig = i.original_price && Number(i.original_price) !== Number(i.price);
+        const origCell = orig ? `<span style="color:var(--text-secondary);font-size:11px;text-decoration:line-through">${Number(i.original_price).toLocaleString()}</span><span style="color:var(--danger);font-weight:700"> ${Number(i.price).toLocaleString()}</span>` : `<span style="color:var(--text-secondary)">${Number(i.price).toLocaleString()}</span>`;
+        html += `<tr>
+          <td style="font-weight:700">${i.product_name || '-'}</td>
+          <td style="width:60px"><input type="number" class="inv-item-qty" value="${i.quantity}" min="1" data-idx="${idx}" data-itemid="${i.id}" oninput="onInvItemChange(${sale.id}, this)" style="width:50px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center"></td>
+          <td style="width:80px"><input type="number" class="inv-item-price" value="${i.price}" step="0.01" min="0" data-idx="${idx}" data-itemid="${i.id}" oninput="onInvItemChange(${sale.id}, this)" style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center"></td>
+          <td style="white-space:nowrap">${origCell}</td>
+          <td style="font-weight:700"><span class="inv-item-total">${Number(i.total).toLocaleString()}</span></td>
+          <td style="display:flex;gap:4px">
+            <button class="btn btn-sm btn-danger" onclick="deleteSaleItemFromModal(${sale.id},${i.id})" title="حذف" style="padding:2px 8px;font-size:12px">✕</button>
+          </td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      html += `<button class="btn btn-sm btn-primary" onclick="showAddItemToInvoice(${sale.id})" style="margin:8px 0">➕ إضافة منتج</button>`;
+
+      if (returns.length > 0) {
+        html += `<h4 style="margin-top:12px">المرتجعات</h4><table style="font-size:12px"><thead><tr><th>المنتج</th><th>الكمية</th><th>القيمة</th><th>الوجهة</th></tr></thead><tbody>`;
+        returns.forEach(r => {
+          html += `<tr><td>${r.product_name || '-'}</td><td>${r.quantity}</td><td style="color:var(--danger)">${Number(r.amount).toLocaleString()}</td><td>${r.destination === 'مصنع' ? '🏭 مصنع' : '📦 مخزون'}</td></tr>`;
+        });
+        html += `</tbody></table>`;
+      }
+
+      html += `<div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary" onclick="saveInvoiceChanges()" style="flex:1">💾 حفظ التعديلات</button>
+        <button class="btn" style="background:var(--border);flex:1" onclick="closeModal()">إغلاق</button>
+      </div>`;
+
+      document.getElementById('invoiceModalTitle').textContent = `فاتورة ${sale.invoice_number}`;
+      document.getElementById('invoiceDetails').innerHTML = html;
+      document.getElementById('invoiceModal').style.display = 'flex';
+    }
+
+    async function flushPendingItemChanges() {
+      if (!window._editingSale) return false;
+      let changed = false;
+      for (const item of window._editingSale.items) {
+        const newQty = typeof item._qty === 'number' ? item._qty : item.quantity;
+        const newPrice = typeof item._price === 'number' ? item._price : item.price;
+        if (newQty !== item.quantity || newPrice !== item.price) {
+          const newTotal = newQty * newPrice;
+          await adjustInvoiceStock(item.product_id, item.quantity);
+          await adjustInvoiceStock(item.product_id, -newQty);
+          await window.api.db.run("UPDATE sale_items SET quantity=?, price=?, total=? WHERE id=?", [newQty, newPrice, newTotal, item.id]);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const sum = await window.api.db.get("SELECT SUM(total) AS s FROM sale_items WHERE sale_id=?", [window._editingSale.id]);
+        const newTotal = sum.s || 0;
+        await window.api.db.run("UPDATE sales SET total_amount=? WHERE id=?", [newTotal, window._editingSale.id]);
+      }
+      return changed;
+    }
+
+    function onInvItemChange(saleId, input) {
+      const idx = parseInt(input.dataset.idx);
+      const row = input.closest('tr');
+      const qty = parseInt(row.querySelector('.inv-item-qty').value) || 1;
+      const price = parseFloat(row.querySelector('.inv-item-price').value) || 0;
+      const total = qty * price;
+      row.querySelector('.inv-item-total').textContent = total.toLocaleString();
+      // Update stored data
+      if (window._editingSale && window._editingSale.items[idx]) {
+        window._editingSale.items[idx]._qty = qty;
+        window._editingSale.items[idx]._price = price;
+      }
+      updateInvTotals();
+    }
+
+    function updateInvTotals() {
+      if (!window._editingSale) return;
+      const total = window._editingSale.items.reduce((sum, i) => {
+        const qty = typeof i._qty === 'number' ? i._qty : i.quantity;
+        const price = typeof i._price === 'number' ? i._price : i.price;
+        return sum + (qty * price);
+      }, 0);
+      const discount = parseFloat(document.getElementById('editInvDiscount').value) || 0;
+      const paid = parseFloat(document.getElementById('editInvPaid').value) || 0;
+      const remaining = Math.max(0, total - discount - paid);
+      document.getElementById('editInvTotal').textContent = total.toLocaleString();
+      const remEl = document.getElementById('editInvRemaining');
+      remEl.textContent = remaining.toLocaleString();
+      remEl.style.color = remaining > 0 ? 'var(--danger)' : 'var(--success)';
+    }
+
+    function isSameDayAsToday(dbDateStr) {
+      if (!dbDateStr) return false;
+      const d = new Date(dbDateStr.includes('Z') || dbDateStr.includes('+') ? dbDateStr : dbDateStr + 'Z');
+      const now = new Date();
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    }
+
+    async function bookInvoiceAdjustment(sale, amount, reason, userId) {
+      if (!amount) return;
+      // Same-day edit -> drawer; different-day edit -> treasury
+      if (!isSameDayAsToday(sale.created_at)) {
+        await window.api.cash.addTreasuryEntry(amount, reason);
+        return;
+      }
+      const dtMap = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+      let bd = null;
+      if (sale.payment_breakdown) { try { bd = JSON.parse(sale.payment_breakdown); } catch(e) {} }
+      const positive = bd ? Object.entries(bd).filter(([, v]) => v > 0) : [];
+      if (positive.length > 1) {
+        const total = positive.reduce((a, [, v]) => a + v, 0);
+        for (const [k, v] of positive) {
+          await window.api.cash.addDrawerEntry(dtMap[k] || k, (v / total) * amount, reason);
+        }
+      } else if (positive.length === 1) {
+        await window.api.cash.addDrawerEntry(dtMap[positive[0][0]] || positive[0][0], amount, reason);
+      } else {
+        await window.api.cash.addDrawerEntry(dtMap[sale.payment_method] || 'نقدي', amount, reason);
+      }
+    }
+
+    async function saveInvoiceChanges() {
+      const ctx = window._editingSale;
+      if (!ctx) return;
+
+      const discount = parseFloat(document.getElementById('editInvDiscount').value) || 0;
+      const paid = parseFloat(document.getElementById('editInvPaid').value) || 0;
+      const method = document.getElementById('editInvMethod').value;
+      const customerId = document.getElementById('editInvCustomer').value || null;
+
+      // Calculate new total from items (using inputs)
+      const newTotal = ctx.items.reduce((sum, i) => {
+        const qty = typeof i._qty === 'number' ? i._qty : i.quantity;
+        const price = typeof i._price === 'number' ? i._price : i.price;
+        return sum + (qty * price);
+      }, 0);
+
+      const reasons = [];
+
+      for (const item of ctx.items) {
+        const newQty = typeof item._qty === 'number' ? item._qty : item.quantity;
+        const newPrice = typeof item._price === 'number' ? item._price : item.price;
+        const newLineTotal = newQty * newPrice;
+
+        if (newQty !== item.quantity || newPrice !== item.price) {
+          const oldTotal = item.quantity * item.price;
+          const diff = newLineTotal - oldTotal;
+
+          // Update stock: restore old, deduct new
+          await adjustInvoiceStock(item.product_id, item.quantity);
+          await adjustInvoiceStock(item.product_id, -newQty);
+
+          await window.api.db.run("UPDATE sale_items SET quantity=?, price=?, total=? WHERE id=?", [newQty, newPrice, newLineTotal, item.id]);
+
+          const prodName = item.product_name || '#';
+          if (diff > 0) reasons.push(`زيادة ${prodName} ${diff.toLocaleString()}`);
+          else if (diff < 0) reasons.push(`تخفيض ${prodName} ${Math.abs(diff).toLocaleString()}`);
+        }
+      }
+
+      // Reconcile paid against the new due (total - discount)
+      const newDue = newTotal - discount;
+      const wasCapped = paid > newDue;
+      const effectivePaid = Math.min(paid, newDue);
+      const paidDiff = effectivePaid - ctx.paid;
+      if (wasCapped) {
+        reasons.push(`تخفيض مدفوع تلقائي ${Math.abs(paid - effectivePaid).toLocaleString()}`);
+      } else if (paidDiff > 0) {
+        reasons.push(`إضافة مدفوع ${paidDiff.toLocaleString()}`);
+      } else if (paidDiff < 0) {
+        reasons.push(`تخفيض مدفوع ${Math.abs(paidDiff).toLocaleString()}`);
+      }
+
+      // Handle discount change
+      const discDiff = discount - ctx.discount;
+      if (discDiff > 0) reasons.push(`زيادة خصم ${discDiff.toLocaleString()}`);
+      else if (discDiff < 0) reasons.push(`تخفيض خصم ${Math.abs(discDiff).toLocaleString()}`);
+
+      // Update sale
+      const remaining = Math.max(0, newDue - effectivePaid);
+      await window.api.db.run("UPDATE sales SET total_amount=?, discount=?, paid_amount=?, remaining_amount=?, payment_method=?, customer_id=? WHERE id=?", [newTotal, discount, effectivePaid, remaining, method, customerId, ctx.id]);
+
+      // Book cash adjustment: drawer if same day, treasury otherwise
+      if (paidDiff !== 0) {
+        await bookInvoiceAdjustment({ created_at: ctx.createdAt, payment_breakdown: ctx.payment_breakdown, payment_method: ctx.method }, paidDiff, 'تعديل فاتورة ' + ctx.invoice + (reasons.length ? ' - ' + reasons.join(', ') : ''), user.id);
+      }
+
+      closeModal();
+      window.showAlert('✅ تم حفظ التعديلات');
+      loadInvoices();
+    }
+
+    let _addItemSelectedId = null;
+    let _addItemProducts = [];
+
+    async function showAddItemToInvoice(saleId) {
+      _addItemProducts = await window.api.db.all("SELECT * FROM products ORDER BY name");
+      _addItemSelectedId = null;
+      const html = `
+        <div class="form-group">
+          <label>بحث المنتج</label>
+          <input type="text" id="addItemSearch" placeholder="ابحث بالاسم أو الباركود..." oninput="filterAddItemProducts()" onkeydown="if(event.key==='Enter'){event.preventDefault();quickAddItemProduct()}" style="width:100%" autofocus>
+          <div id="addItemSuggestions" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:4px;display:none"></div>
+        </div>
+        <div class="form-group"><label>الكمية</label><input type="number" id="addItemQty" value="1" min="1" step="1" oninput="updateAddItemInfo()" style="width:100%"></div>
+        <div class="form-group"><label>السعر</label><input type="number" id="addItemPrice" step="0.01" min="0" oninput="updateAddItemInfo()" style="width:100%"></div>
+        <div id="addItemInfo" style="padding:8px;background:var(--card);border-radius:6px;margin-bottom:8px;text-align:center;color:var(--text-secondary)">👆 ابحث واختر منتجاً</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="confirmAddItemToInvoice(${saleId})" style="flex:1">إضافة</button>
+          <button class="btn" style="background:var(--border);flex:1" onclick="document.getElementById('addItemModal').style.display='none'">إلغاء</button>
+        </div>
+      `;
+      let modal = document.getElementById('addItemModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'addItemModal';
+        modal.className = 'modal-overlay';
+        modal.style.display = 'none';
+        modal.innerHTML = `<div class="modal" style="max-width:450px"><h2>➕ إضافة منتج للفاتورة</h2><div id="addItemBody"></div></div>`;
+        document.body.appendChild(modal);
+      }
+      document.getElementById('addItemBody').innerHTML = html;
+      modal.style.display = 'flex';
+      setTimeout(() => document.getElementById('addItemSearch')?.focus(), 100);
+    }
+
+    function filterAddItemProducts() {
+      const q = document.getElementById('addItemSearch').value.trim().toLowerCase();
+      const container = document.getElementById('addItemSuggestions');
+      if (!q) { container.style.display = 'none'; return; }
+      const filtered = _addItemProducts.filter(p => p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
+      if (!filtered.length) { container.style.display = 'block'; container.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-secondary)">لا توجد نتائج</div>'; return; }
+      container.style.display = 'block';
+      container.innerHTML = filtered.map(p => `<div class="add-item-suggestion" data-id="${p.id}" data-name="${p.name}" data-price="${p.sell_price}" data-stock="${p.stock||0}" onclick="selectAddItemProduct(this)" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()} — 📦 ${p.stock||0}</span></div>`).join('');
+    }
+
+    function quickAddItemProduct() {
+      const q = document.getElementById('addItemSearch').value.trim().toLowerCase();
+      if (!q) return;
+      const byBarcode = _addItemProducts.filter(p => p.barcode && p.barcode.toLowerCase() === q);
+      const matches = byBarcode.length > 0 ? byBarcode : _addItemProducts.filter(p => p.name.toLowerCase() === q);
+      if (matches.length === 1) {
+        selectAddItemProduct_byId(matches[0].id, matches[0].sell_price, matches[0].name);
+        document.getElementById('addItemSuggestions').style.display = 'none';
+      } else {
+        filterAddItemProducts();
+      }
+    }
+
+    function selectAddItemProduct(el) {
+      document.querySelectorAll('.add-item-suggestion').forEach(e => e.style.background = '');
+      el.style.background = 'var(--primary-light, #e3f2fd)';
+      selectAddItemProduct_byId(parseInt(el.dataset.id), parseFloat(el.dataset.price), el.dataset.name);
+    }
+
+    function selectAddItemProduct_byId(id, price, name) {
+      _addItemSelectedId = id;
+      document.getElementById('addItemSearch').value = name;
+      document.getElementById('addItemSuggestions').style.display = 'none';
+      document.getElementById('addItemPrice').value = price;
+      updateAddItemInfo();
+    }
+
+    function updateAddItemInfo() {
+      const qty = parseInt(document.getElementById('addItemQty').value) || 0;
+      const price = parseFloat(document.getElementById('addItemPrice').value);
+      if (!_addItemSelectedId) { document.getElementById('addItemInfo').innerHTML = '👆 ابحث واختر منتجاً'; return; }
+      if (!price) { document.getElementById('addItemInfo').innerHTML = '⚠️ أدخل السعر'; return; }
+      const prod = _addItemProducts.find(p => p.id === _addItemSelectedId);
+      const total = qty * price;
+      document.getElementById('addItemInfo').innerHTML = `
+        <strong>${prod ? prod.name : ''}</strong><br>
+        الكمية: ${qty} | السعر: ${Number(price).toLocaleString()}<br>
+        الإجمالي: <strong>${Number(total).toLocaleString()}</strong><br>
+        <span style="color:${qty > (prod ? prod.stock||0 : 0) ? 'var(--danger)' : 'var(--success)'}">المخزون المتاح: ${prod ? prod.stock||0 : 0}</span>
+      `;
+    }
+
+    async function confirmAddItemToInvoice(saleId) {
+      const productId = _addItemSelectedId;
+      if (!productId) { window.showAlert('ابحث واختر منتجاً أولاً', 'error'); return; }
+      const qty = parseInt(document.getElementById('addItemQty').value) || 0;
+      if (qty <= 0) { window.showAlert('الكمية غير صالحة', 'error'); return; }
+      const price = parseFloat(document.getElementById('addItemPrice').value);
+      if (!price || price <= 0) { window.showAlert('السعر غير صالح', 'error'); return; }
+      const prod = _addItemProducts.find(p => p.id === productId);
+      if (!prod) { window.showAlert('المنتج غير موجود', 'error'); return; }
+      if ((prod.stock || 0) < qty) { window.showAlert('الكمية غير متوفرة في المخزون', 'error'); return; }
+
+      // Flush pending inline edits first
+      await flushPendingItemChanges();
+
+      await adjustInvoiceStock(productId, -qty);
+      const total = qty * price;
+      await window.api.db.run("INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?,?,?,?,?,?,?)", [saleId, productId, qty, price, total, prod.buy_price || 0, prod.sell_price || price]);
+
+      // Update sale total
+      const sumItems = await window.api.db.get("SELECT SUM(total) AS sum FROM sale_items WHERE sale_id=?", [saleId]);
+      const newTotal = sumItems.sum || 0;
+      const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [saleId]);
+      const newRemaining = Math.max(0, newTotal - (sale.discount || 0) - sale.paid_amount);
+      await window.api.db.run("UPDATE sales SET total_amount=?, remaining_amount=? WHERE id=?", [newTotal, newRemaining, saleId]);
+
+      document.getElementById('addItemModal').style.display = 'none';
+      window.showAlert('✅ تم إضافة المنتج');
+      showInvoice(saleId);
+    }
+
+    async function deleteSaleItemFromModal(saleId, itemId) {
+      // Flush pending inline edits first
+      await flushPendingItemChanges();
+
+      const itemCount = await window.api.db.get("SELECT COUNT(*) AS cnt FROM sale_items WHERE sale_id=?", [saleId]);
+      if ((itemCount.cnt || 0) <= 1) { window.showAlert('لا يمكن حذف آخر منتج في الفاتورة', 'error'); return; }
+      if (!await window.showConfirm('حذف هذا المنتج من الفاتورة؟')) return;
+      const item = await window.api.db.get("SELECT * FROM sale_items WHERE id=?", [itemId]);
+      if (!item) return;
+      const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [saleId]);
+      if (!sale) return;
+
+      // Restore stock
+      await adjustInvoiceStock(item.product_id, item.quantity);
+
+      // Remove from DB
+      await window.api.db.run("DELETE FROM sale_items WHERE id=?", [itemId]);
+
+      // Recalculate sale total and adjust paid proportionally
+      const sumItems = await window.api.db.get("SELECT SUM(total) AS sum FROM sale_items WHERE sale_id=?", [saleId]);
+      const newTotal = sumItems.sum || 0;
+      const oldEffectiveTotal = sale.total_amount - (sale.discount || 0);
+      let newPaid = sale.paid_amount;
+      let drawerAdjust = 0;
+      if (oldEffectiveTotal > 0) {
+        const ratio = item.total / oldEffectiveTotal;
+        const paidToReduce = Math.min(sale.paid_amount * ratio, sale.paid_amount);
+        newPaid = Math.max(0, sale.paid_amount - paidToReduce);
+        drawerAdjust = -paidToReduce;
+      }
+      if (drawerAdjust !== 0) {
+        await bookInvoiceAdjustment(sale, drawerAdjust, 'حذف منتج من فاتورة ' + sale.invoice_number + ' - إلغاء جزء من المدفوع', user.id);
+      }
+      const newRemaining = Math.max(0, newTotal - (sale.discount || 0) - newPaid);
+      await window.api.db.run("UPDATE sales SET total_amount=?, paid_amount=?, remaining_amount=? WHERE id=?", [newTotal, newPaid, newRemaining, saleId]);
+
+      showInvoice(saleId);
+      loadInvoices();
+    }
+
+    async function deleteInvoice(id) {
+      if (!await window.showConfirm('هل أنت متأكد من إلغاء هذه الفاتورة؟\nسيتم إرجاع المنتجات إلى المخزون وعكس إيداع الدرج.')) return;
+      // Whole cancellation runs in main under invoices.cancel: drawer reversal,
+      // stock restore and return cleanup in one transaction.
+      const r = await window.api.ops.cancelInvoice(id);
+      if (!r.success) { window.showAlert(r.message, 'error'); return; }
+      window.showAlert('تم إلغاء الفاتورة بنجاح');
+      loadInvoices();
+    }
+
+
+    async function openEditModal(id) {
+      const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [id]);
+      if (!sale) return;
+      const customers = await window.api.db.all("SELECT * FROM customers WHERE COALESCE(archived,0)=0 OR id=? ORDER BY name", [sale.customer_id || -1]);
+      const sel = document.getElementById('editCustomer');
+      sel.innerHTML = '<option value="">بدون عميل</option>' + customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      sel.value = sale.customer_id || '';
+      document.getElementById('editDiscount').value = sale.discount || 0;
+      document.getElementById('editMethod').value = sale.payment_method || 'cash';
+      document.getElementById('editPaid').value = sale.paid_amount || 0;
+      document.getElementById('editInvoiceModal').style.display = 'flex';
+      window._editSaleId = id;
+      window._editSaleTotal = sale.total_amount;
+    }
+
+    async function saveInvoice() {
+      const id = window._editSaleId;
+      const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [id]);
+      if (!sale) return;
+      const customerId = document.getElementById('editCustomer').value || null;
+      const discount = parseFloat(document.getElementById('editDiscount').value) || 0;
+      const method = document.getElementById('editMethod').value;
+      const paid = parseFloat(document.getElementById('editPaid').value) || 0;
+      const total = window._editSaleTotal;
+      const newDue = total - discount;
+      const effectivePaid = Math.min(paid, newDue);
+      const paidDiff = effectivePaid - (sale.paid_amount || 0);
+      const remaining = Math.max(0, newDue - effectivePaid);
+      await window.api.db.run('UPDATE sales SET customer_id=?, discount=?, paid_amount=?, remaining_amount=?, payment_method=? WHERE id=?', [customerId, discount, effectivePaid, remaining, method, id]);
+      if (paidDiff !== 0) {
+        const reasons = [];
+        if (paidDiff > 0) reasons.push(`إضافة مدفوع ${paidDiff.toLocaleString()}`);
+        else if (paidDiff < 0) reasons.push(`تخفيض مدفوع ${Math.abs(paidDiff).toLocaleString()}`);
+        const discDiff = discount - (sale.discount || 0);
+        if (discDiff > 0) reasons.push(`زيادة خصم ${discDiff.toLocaleString()}`);
+        else if (discDiff < 0) reasons.push(`تخفيض خصم ${Math.abs(discDiff).toLocaleString()}`);
+        await bookInvoiceAdjustment(sale, paidDiff, 'تعديل فاتورة ' + sale.invoice_number + (reasons.length ? ' - ' + reasons.join(', ') : ''), user.id);
+      }
+      document.getElementById('editInvoiceModal').style.display = 'none';
+      window.showAlert('تم تعديل الفاتورة بنجاح');
+      loadInvoices();
+    }
+
+    async function printInvoice(id) {
+      const sale = await window.api.db.get("SELECT s.*, c.name AS customer_name FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE s.id=?", [id]);
+      if (!sale) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
+      const items = await window.api.db.all("SELECT si.*, p.name AS product_name, p.barcode FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
+      const barcode = items.map(i => i.barcode).filter(Boolean).join(', ');
+      const cartItems = items.map(i => ({ name: i.product_name || '-', qty: i.quantity, price: i.price, total: i.total, size: i.size || '' }));
+      const methodLabels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+      const pb = sale.payment_breakdown ? JSON.parse(sale.payment_breakdown) : null;
+      let methodStr;
+      if (pb && Object.keys(pb).length > 1) {
+        methodStr = Object.entries(pb).map(([k, v]) => `${methodLabels[k] || k} ${Number(v).toLocaleString()}`).join(' + ');
+      } else {
+        methodStr = methodLabels[sale.payment_method] || sale.payment_method || 'نقدي';
+      }
+      window.api.print.invoice({
+        invoice: sale.invoice_number,
+        items: cartItems,
+        total: sale.total_amount,
+        paid: sale.paid_amount,
+        method: methodStr,
+        discount: sale.discount || 0,
+        payment_breakdown: sale.payment_breakdown || '',
+        customer: sale.customer_name || '',
+        barcode,
+        cashier: ''
+      });
+    }
+
+    function closeModal() { document.getElementById('invoiceModal').style.display = 'none'; }
+    async function loadCategories() {
+      const cats = await window.api.db.all("SELECT * FROM categories ORDER BY name");
+      document.getElementById('filterCategory').innerHTML = '<option value="">كل التصنيفات</option>' + cats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    }
+    loadInvoiceCompositions();
+    loadDrawerBalance();
+    loadCategories();
+    loadInvoices();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

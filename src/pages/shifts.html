@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الشيفتات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>🕐 إدارة الشيفتات</h2>
+      </div>
+      <div id="shiftCards" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+      <div class="card">
+        <div class="search-bar" style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="searchInput" placeholder="بحث بالاسم..." oninput="loadShifts()" style="flex:1;min-width:200px">
+          <input type="date" id="filterDate" onchange="loadShifts()">
+          <button class="btn btn-sm" onclick="document.getElementById('filterDate').value='';loadShifts()">مسح التاريخ</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>المستخدم</th>
+                <th>الحالة</th>
+                <th>وقت البداية</th>
+                <th>وقت النهاية</th>
+                <th>المدة</th>
+                <th>المبيعات</th>
+                <th>الإجمالي</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="shiftsTable"></tbody>
+          </table>
+        </div>
+        <div id="noShifts" style="display:none;text-align:center;padding:40px;color:var(--text-muted);">لا توجد شيفتات</div>
+      </div>
+    </main>
+  </div>
+
+  <div id="shiftModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:550px;">
+      <h2 id="shiftModalTitle">تفاصيل الشيفت</h2>
+      <div id="shiftModalBody"></div>
+      <button type="button" class="btn" style="background:var(--border);margin-top:12px;width:100%;" onclick="closeShiftModal()">إغلاق</button>
+    </div>
+  </div>
+
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    function formatDuration(mins) {
+      if (!mins && mins !== 0) return '-';
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h > 0) return h + ' ساعة و ' + m + ' دقيقة';
+      return m + ' دقيقة';
+    }
+
+    function formatDateTime(dt) {
+      if (!dt) return '-';
+      const d = new Date(dt.includes('Z') || dt.includes('+') ? dt : dt + 'Z');
+      return d.toLocaleString('ar-EG');
+    }
+
+    let shiftCardsInterval = null;
+
+    async function loadShiftCards() {
+      const active = await window.api.db.get("SELECT * FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", [user.id]);
+
+      if (!active) {
+        document.getElementById('shiftCards').innerHTML = `
+          <div class="card" style="width:100%;text-align:center;"><h3>⚫ لا يوجد شيفت نشط</h3><div class="value" style="color:var(--text-muted)">افتح شيفت من نقطة البيع</div></div>
+        `;
+        return;
+      }
+
+      const dur = calcDuration(active.start_time);
+      const hrs = Math.floor(dur / 60);
+      const mins = dur % 60;
+
+      const stats = await window.api.db.get(
+        "SELECT COUNT(*) as cnt, COALESCE(SUM(total_amount),0) as total, COALESCE(SUM(paid_amount),0) as paid, COALESCE(SUM(remaining_amount),0) as remaining FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, active.start_time]
+      );
+      const exp = await window.api.db.get(
+        "SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, active.start_time]
+      );
+      const cost = await window.api.db.get(
+        "SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE s.user_id = ? AND datetime(s.created_at, 'localtime') >= ?",
+        [user.id, active.start_time]
+      );
+      const debt = await window.api.db.get(
+        "SELECT COALESCE(SUM(remaining_amount),0) as total FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ? AND remaining_amount > 0",
+        [user.id, active.start_time]
+      );
+      const paidDebt = await window.api.db.get(
+        "SELECT COALESCE(SUM(amount),0) as total FROM customer_debt_entries WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, active.start_time]
+      );
+
+      const salesTotal = stats.total || 0;
+      const costTotal = cost.total || 0;
+      const expTotal = exp.total || 0;
+      const debtTotal = debt.total || 0;
+      const profit = salesTotal - costTotal;
+      const netProfit = profit - expTotal - debtTotal;
+
+      document.getElementById('shiftCards').innerHTML = `
+        <div class="card"><h3>🟢 شيفت نشط</h3><div class="value green" style="font-size:14px">${active.user_name}</div></div>
+        <div class="card"><h3>⏱️ المدة</h3><div class="value blue">${hrs}س ${mins}د</div></div>
+        <div class="card"><h3>🛒 عدد الفواتير</h3><div class="value">${stats.cnt}</div></div>
+        <div class="card"><h3>💰 إجمالي المبيعات</h3><div class="value green">${Number(salesTotal).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>📦 تكلفة المبيعات</h3><div class="value red">${Number(costTotal).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>💵 الربح</h3><div class="value green">${Number(profit).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>💸 المصروفات</h3><div class="value red">${Number(expTotal).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>📊 صافي الربح</h3><div class="value ${netProfit >= 0 ? 'green' : 'red'}">${Number(netProfit).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>⚖️ ديون موثقة</h3><div class="value red">${Number(debtTotal).toLocaleString()} ${window.currencySymbol}</div></div>
+        <div class="card"><h3>✅ مسدد</h3><div class="value green">${Number(paidDebt.total || 0).toLocaleString()} ${window.currencySymbol}</div></div>
+      `;
+    }
+
+    function startShiftCardsRefresh() {
+      if (shiftCardsInterval) clearInterval(shiftCardsInterval);
+      loadShiftCards();
+      shiftCardsInterval = setInterval(loadShiftCards, 5000);
+    }
+
+    function parseShiftTime(str) {
+      return new Date(str.replace(' ', 'T'));
+    }
+
+    function calcDuration(startStr, endStr) {
+      const start = parseShiftTime(startStr);
+      const end = endStr ? parseShiftTime(endStr) : new Date();
+      return Math.floor((end - start) / 60000);
+    }
+
+    async function loadShifts() {
+      const q = document.getElementById('searchInput').value.trim();
+      const date = document.getElementById('filterDate').value;
+      let sql = "SELECT * FROM shifts WHERE 1=1";
+      const params = [];
+      if (q) { sql += " AND user_name LIKE ?"; params.push('%' + q + '%'); }
+      if (date) { sql += " AND date(start_time) = ?"; params.push(date); }
+      sql += " ORDER BY id DESC";
+      const rows = await window.api.db.all(sql, params);
+      const tbody = document.getElementById('shiftsTable');
+      const noDiv = document.getElementById('noShifts');
+      if (rows.length === 0) { tbody.innerHTML = ''; noDiv.style.display = 'block'; return; }
+      noDiv.style.display = 'none';
+      tbody.innerHTML = rows.map((s, i) => {
+        const statusLabel = s.status === 'open' ? '<span style="color:#27ae60;font-weight:700">🟢 مفتوح</span>' : '<span style="color:#e74c3c;font-weight:700">🔴 مغلق</span>';
+        const dur = s.status === 'closed' ? s.duration : calcDuration(s.start_time);
+        return `<tr>
+          <td>${s.id}</td>
+          <td style="font-weight:700">${s.user_name}</td>
+          <td>${statusLabel}</td>
+          <td>${formatDateTime(s.start_time)}</td>
+          <td>${formatDateTime(s.end_time)}</td>
+          <td>${formatDuration(dur)}</td>
+          <td style="font-weight:700;text-align:center">${s.total_sales || 0}</td>
+          <td>${Number(s.total_amount || 0).toLocaleString()} ${window.currencySymbol}</td>
+          <td><button class="btn btn-sm btn-primary" onclick="showShiftDetails(${s.id})">📋 تفاصيل</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function showShiftDetails(id) {
+      const s = await window.api.db.get("SELECT * FROM shifts WHERE id=?", [id]);
+      if (!s) return;
+      document.getElementById('shiftModalTitle').textContent = `تفاصيل الشيفت #${s.id}`;
+      const statusLabel = s.status === 'open' ? '<span style="color:#27ae60;font-weight:700">🟢 مفتوح</span>' : '<span style="color:#e74c3c;font-weight:700">🔴 مغلق</span>';
+      const dur = s.status === 'closed' ? s.duration : calcDuration(s.start_time);
+
+      let salesHtml = '';
+      let salesSql, salesParams;
+      if (s.status === 'closed' && s.end_time) {
+        salesSql = "SELECT s.id, s.invoice_number, s.total_amount, s.discount, s.paid_amount, s.remaining_amount, s.payment_method, s.payment_breakdown, s.customer_id, s.created_at FROM sales s WHERE s.user_id = ? AND datetime(s.created_at, 'localtime') >= ? AND datetime(s.created_at, 'localtime') <= ? ORDER BY s.created_at ASC";
+        salesParams = [s.user_id, s.start_time, s.end_time];
+      } else {
+        salesSql = "SELECT s.id, s.invoice_number, s.total_amount, s.discount, s.paid_amount, s.remaining_amount, s.payment_method, s.payment_breakdown, s.customer_id, s.created_at FROM sales s WHERE s.user_id = ? AND datetime(s.created_at, 'localtime') >= ? ORDER BY s.created_at ASC";
+        salesParams = [s.user_id, s.start_time];
+      }
+      const sales = await window.api.db.all(salesSql, salesParams);
+      if (sales.length > 0) {
+        salesHtml = `<h4 style="margin:12px 0 6px;">🛒 فواتير الشيفت</h4>
+          <table style="font-size:12px;"><thead><tr><th>رقم الفاتورة</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th><th></th></tr></thead>
+          <tbody>${sales.map(sa => {
+            const remaining = Math.max(0, sa.total_amount - sa.paid_amount);
+            return `<tr style="cursor:pointer" onclick="showInvoiceDetails(${sa.id})">
+              <td style="font-weight:700">${sa.invoice_number}</td>
+              <td>${Number(sa.total_amount).toLocaleString()}</td>
+              <td style="color:var(--success)">${Number(sa.paid_amount).toLocaleString()}</td>
+              <td style="color:${remaining > 0 ? 'var(--danger)' : 'inherit'}">${remaining.toLocaleString()}</td>
+              <td>${formatDateTime(sa.created_at)}</td>
+              <td>📋</td>
+            </tr>`;
+          }).join('')}</tbody></table>`;
+      }
+
+      let stats, exp, cost, debt, paidDebt;
+      if (s.status === 'closed') {
+        stats = { cnt: s.total_sales, total: s.total_amount, paid: s.total_paid, remaining: s.total_remaining };
+        exp = { total: s.total_expenses };
+        cost = { total: s.total_cost };
+        debt = { total: s.total_debt };
+        paidDebt = { total: s.total_paid_debt };
+      } else {
+        stats = await window.api.db.get("SELECT COUNT(*) as cnt, COALESCE(SUM(total_amount),0) as total, COALESCE(SUM(paid_amount),0) as paid, COALESCE(SUM(remaining_amount),0) as remaining FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?", [s.user_id, s.start_time]);
+        exp = await window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?", [s.user_id, s.start_time]);
+        cost = await window.api.db.get("SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s2 ON si.sale_id = s2.id WHERE s2.user_id = ? AND datetime(s2.created_at, 'localtime') >= ?", [s.user_id, s.start_time]);
+        debt = await window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as total FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ? AND remaining_amount > 0", [s.user_id, s.start_time]);
+        paidDebt = await window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM customer_debt_entries WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?", [s.user_id, s.start_time]);
+      }
+
+      const salesTotal = stats.total || 0;
+      const costTotal = cost.total || 0;
+      const expTotal = exp.total || 0;
+      const debtTotal = debt.total || 0;
+      const paidDebtTotal = paidDebt.total || 0;
+      const profit = salesTotal - costTotal;
+      const netProfit = profit - expTotal - debtTotal;
+
+      document.getElementById('shiftModalBody').innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>المستخدم:</strong> <span>${s.user_name}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>الحالة:</strong> ${statusLabel}</div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>وقت البداية:</strong> <span>${formatDateTime(s.start_time)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>وقت النهاية:</strong> <span>${formatDateTime(s.end_time)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>المدة:</strong> <span>${formatDuration(dur)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>عدد المبيعات:</strong> <span style="font-weight:700">${stats.cnt || 0}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>إجمالي المبيعات:</strong> <span style="font-weight:700;color:var(--primary)">${Number(salesTotal).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>إجمالي المدفوع:</strong> <span style="color:var(--success)">${Number(stats.paid || 0).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>المتبقي:</strong> <span style="color:var(--danger)">${Number(stats.remaining || 0).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>💵 الربح:</strong> <span style="color:var(--success);font-weight:700">${Number(profit).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>💸 المصروفات:</strong> <span style="color:var(--danger)">${Number(expTotal).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>📦 تكلفة المبيعات:</strong> <span style="color:var(--danger)">${Number(costTotal).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>📊 صافي الربح:</strong> <span style="color:${netProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${Number(netProfit).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>⚖️ ديون موثقة:</strong> <span style="color:var(--danger)">${Number(debtTotal).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>✅ مسدد:</strong> <span style="color:var(--success)">${Number(paidDebtTotal).toLocaleString()} ${window.currencySymbol}</span></div>
+        </div>
+        ${salesHtml}
+      `;
+      document.getElementById('shiftModal').style.display = 'flex';
+    }
+
+    function closeShiftModal() { document.getElementById('shiftModal').style.display = 'none'; }
+
+    async function showInvoiceDetails(saleId) {
+      const sale = await window.api.db.get("SELECT * FROM sales WHERE id = ?", [saleId]);
+      if (!sale) return;
+      const items = await window.api.db.all(
+        "SELECT si.quantity, si.price, si.total, p.name as product_name FROM sale_items si JOIN products p ON si.product_id = p.id WHERE si.sale_id = ?",
+        [saleId]
+      );
+      let customerName = 'عميل عام';
+      if (sale.customer_id) {
+        const c = await window.api.db.get("SELECT name FROM customers WHERE id = ?", [sale.customer_id]);
+        if (c) customerName = c.name;
+      }
+      const methodLabels = { cash: 'نقدي', vodafone: 'فودافون', instapay: 'انستاباي' };
+      let methodText = methodLabels[sale.payment_method] || sale.payment_method || 'نقدي';
+      let breakdownHtml = '';
+      if (sale.payment_breakdown) {
+        try {
+          const bd = JSON.parse(sale.payment_breakdown);
+          const parts = [];
+          if (bd.cash) parts.push(`نقدي: ${Number(bd.cash).toLocaleString()}`);
+          if (bd.vodafone) parts.push(`فودافون: ${Number(bd.vodafone).toLocaleString()}`);
+          if (bd.instapay) parts.push(`انستاباي: ${Number(bd.instapay).toLocaleString()}`);
+          if (parts.length > 0) methodText = parts.join(' | ');
+        } catch(e) {}
+      }
+      const remaining = Math.max(0, sale.total_amount - sale.paid_amount);
+
+      const bodyHtml = `
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>رقم الفاتورة:</strong> <span style="font-weight:700">${sale.invoice_number}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>العميل:</strong> <span>${customerName}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>التاريخ:</strong> <span>${formatDateTime(sale.created_at)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>طريقة الدفع:</strong> <span>${methodText}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>الإجمالي:</strong> <span style="font-weight:700;color:var(--primary)">${Number(sale.total_amount).toLocaleString()} ${window.currencySymbol}</span></div>
+          ${sale.discount > 0 ? `<div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>الخصم:</strong> <span style="color:var(--danger)">${Number(sale.discount).toLocaleString()} ${window.currencySymbol}</span></div>` : ''}
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>المدفوع:</strong> <span style="color:var(--success)">${Number(sale.paid_amount).toLocaleString()} ${window.currencySymbol}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:8px;background:var(--card);border-radius:6px;"><strong>المتبقي:</strong> <span style="color:${remaining > 0 ? 'var(--danger)' : 'inherit'}">${remaining.toLocaleString()} ${window.currencySymbol}</span></div>
+        </div>
+        <h4 style="margin:12px 0 6px;">📦 المنتجات</h4>
+        <table style="font-size:12px;"><thead><tr><th>المنتج</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+        <tbody>${items.map(it => `<tr>
+          <td>${it.product_name}</td>
+          <td>${it.quantity}</td>
+          <td>${Number(it.price).toLocaleString()}</td>
+          <td style="font-weight:700">${Number(it.total).toLocaleString()}</td>
+        </tr>`).join('')}</tbody></table>
+        <button type="button" class="btn" style="background:var(--border);margin-top:12px;width:100%;" onclick="document.getElementById('shiftModalBody').innerHTML = window._lastShiftModalHtml; window._lastShiftModalHtml = null;">← رجوع</button>
+      `;
+
+      window._lastShiftModalHtml = document.getElementById('shiftModalBody').innerHTML;
+      document.getElementById('shiftModalTitle').textContent = `فاتورة ${sale.invoice_number}`;
+      document.getElementById('shiftModalBody').innerHTML = bodyHtml;
+    }
+
+    startShiftCardsRefresh();
+    loadShifts();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

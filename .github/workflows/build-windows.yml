@@ -1,0 +1,89 @@
+name: Build Windows
+
+# Native Windows build. Doing it here (instead of cross-building from Linux with
+# wine) matters: better-sqlite3 is a native module, and the Linux cross-build
+# silently packaged a Linux .node inside the Windows app, which only fails on the
+# target machine. The verify step below exists to catch exactly that.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (zip + nsis installer)
+        run: npx electron-builder --win --x64
+        env:
+          # no signing certificate in this repo; drop these to sign the exe
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify the native module is a Windows binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $node = 'dist/win-unpacked/resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+          if (-not (Test-Path $node)) {
+            Get-ChildItem dist/win-unpacked/resources -Recurse -Filter *.node -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "found: $($_.FullName)" }
+            throw "better_sqlite3.node is missing from the build"
+          }
+          $magic = [System.IO.File]::ReadAllBytes($node)[0..3]
+          $hex = ($magic | ForEach-Object { $_.ToString('X2') }) -join ' '
+          Write-Host "first bytes: $hex"
+          # 4D 5A = "MZ", a Windows PE. 7F 45 4C 46 = ELF, i.e. a Linux build
+          # that would fail on the user's machine.
+          if ($hex -like '7F 45 4C 46*') { throw "packaged an ELF (Linux) .node - the build is not usable on Windows" }
+          if ($hex -notlike '4D 5A*') { throw "unexpected magic '$hex' - expected a PE (MZ) binary" }
+          Write-Host "OK: better_sqlite3.node is a Windows PE binary"
+
+      - name: Verify the app entry points made it into the asar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asar = 'dist/win-unpacked/resources/app.asar'
+          if (-not (Test-Path $asar)) { throw "app.asar is missing" }
+          npx asar list $asar > asar-entries.txt
+          foreach ($f in @('/main.js', '/preload.js', '/package.json', '/src/js/database.js', '/src/js/pager.js', '/src/pages/invoices.html', '/src/pages/pos.html')) {
+            if (-not (Select-String -Path asar-entries.txt -SimpleMatch $f -Quiet)) { throw "$f is not inside the asar" }
+            Write-Host "ok: $f"
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: CasherApp-windows-x64
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.zip
+          generate_release_notes: true

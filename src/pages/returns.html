@@ -1,0 +1,767 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>المرتجعات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة المرتجعات</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm btn-warning" id="addReturnBtn" onclick="showReturnModal()" style="${window.can('returns','a')?'':'display:none'}">↩️ إرجاع مبيعات</button>
+          <button class="btn btn-sm btn-info" id="addPurchaseReturnBtn" onclick="showPurchaseReturnModal()" style="${window.can('returns','a')?'':'display:none'}">📥 إرجاع مشتريات</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn btn-sm" id="tabSale" onclick="switchTab('sale')" style="background:var(--primary);color:#fff;">مرتجعات المبيعات</button>
+        <button class="btn btn-sm" id="tabPurchase" onclick="switchTab('purchase')" style="background:var(--border);">مرتجعات المشتريات</button>
+      </div>
+      <div class="cards">
+        <div class="card"><h3>إجمالي المرتجعات</h3><div class="value red" id="totalReturns">0</div></div>
+        <div class="card"><h3>عدد عمليات الإرجاع</h3><div class="value" id="returnCount">0</div></div>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>رقم الفاتورة</th><th>النوع</th><th>المنتج</th><th>الكمية</th><th>المبلغ</th><th>السبب</th><th>التاريخ</th><th>الإجراءات</th></tr></thead>
+          <tbody id="returnsTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="returnModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:720px;">
+      <h2>↩️ إرجاع مبيعات</h2>
+      <div class="form-group"><label>امسح باركود منتج أو رقم فاتورة بيع</label>
+        <input type="text" id="returnSearch" placeholder="مسح باركود منتج ➜ إضافته من الفاتورة | مسح رقم فاتورة ➜ عرض أصنافها" oninput="filterReturnList()" onkeydown="if(event.key==='Enter'){event.preventDefault();quickAddSaleReturn();}" autofocus>
+        <div id="saleInfo" style="font-size:12px;margin-top:4px;"></div>
+      </div>
+      <div id="returnList" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;"></div>
+      <div id="returnSelected" style="margin-top:4px;"></div>
+      <div id="returnTotal" style="font-weight:700;color:var(--danger);font-size:18px;text-align:center;margin:8px 0;">الإجمالي: 0</div>
+      <div id="returnDebtNote" style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:8px;"></div>
+      <div class="form-group"><label>السبب</label>
+        <select id="returnReason">
+          <option value="مقاس غير مناسب">مقاس غير مناسب</option>
+          <option value="لون مختلف">لون مختلف</option>
+          <option value="عيب في التصنيع">عيب في التصنيع</option>
+          <option value="تالف">تالف</option>
+          <option value="خطأ في الفاتورة">خطأ في الفاتورة</option>
+          <option value="أخرى">أخرى</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-warning" id="submitReturnBtn" style="flex:1;" onclick="submitSaleReturn()" disabled>تأكيد الإرجاع</button>
+        <button class="btn" style="background:var(--border);flex:1;" onclick="closeModal('returnModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+  <div id="srDestinationModal" class="modal-overlay" style="display:none;z-index:1200;">
+    <div class="modal" style="max-width:420px;">
+      <h2>📤 صرف المبلغ</h2>
+      <div style="text-align:center;margin-bottom:12px;font-size:14px;">
+        <div id="srDestTotal" style="font-size:26px;font-weight:800;color:var(--danger);"></div>
+        <div id="srDestItems" style="font-size:12px;color:var(--text-secondary);"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button data-v="debt" style="padding:12px;border:1px solid var(--warning);background:var(--warning);color:#fff;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">⚖️ خصم من مديونية العميل</button>
+        <button data-v="drawer" style="padding:12px;border:1px solid var(--info);background:var(--info);color:#fff;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">💵 صرف من الدرج (نقدي)</button>
+        <button data-v="treasury" style="padding:12px;border:1px solid var(--primary);background:var(--primary);color:#fff;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">🏦 صرف من الخزينة</button>
+        <button data-v="cancel" style="padding:8px;border:1px solid var(--border);background:var(--border);border-radius:8px;font-size:13px;cursor:pointer;">إلغاء</button>
+      </div>
+    </div>
+  </div>
+  <div id="purchaseReturnModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:720px;">
+      <h2>📥 إرجاع مشتريات</h2>
+      <div class="form-group"><label>امسح باركود منتج أو رقم فاتورة</label>
+        <input type="text" id="purchaseReturnSearch" placeholder="مسح باركود منتج ➜ إضافة تلقائية | مسح رقم فاتورة ➜ عرض أصنافها" oninput="filterPurchaseReturnProducts()" onkeydown="if(event.key==='Enter'){event.preventDefault();quickAddPurchaseReturn();}" autofocus>
+        <div id="purchaseInvoiceInfo" style="font-size:12px;margin-top:4px;"></div>
+      </div>
+      <div id="purchaseInvoiceItems" style="display:none;max-height:150px;overflow-y:auto;border:1px solid var(--info);border-radius:6px;margin-bottom:8px;"></div>
+      <div id="purchaseReturnList" style="max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:4px;"></div>
+      <div id="purchaseReturnSelected" style="margin-top:8px;"></div>
+      <div id="purchaseReturnTotal" style="font-weight:700;color:var(--danger);font-size:18px;text-align:center;margin:8px 0;">الإجمالي: 0</div>
+      <div id="purchaseReturnDebtNote" style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:8px;"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-info" id="submitPurchaseReturn" style="flex:1;" onclick="submitPurchaseReturn()" disabled>تأكيد الإرجاع</button>
+        <button class="btn" style="background:var(--border);flex:1;" onclick="closeModal('purchaseReturnModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+  <div id="prDestinationModal" class="modal-overlay" style="display:none;z-index:1200;">
+    <div class="modal" style="max-width:460px;text-align:center;">
+      <h2>أين يذهب مبلغ الإرجاع؟</h2>
+      <p style="margin:8px 0 4px;font-size:13px;color:var(--text-secondary);" id="prDestItems"></p>
+      <p style="margin:0 0 16px;font-size:26px;font-weight:700;color:var(--danger);" id="prDestTotal"></p>
+      <button class="btn" data-v="treasury" style="width:100%;margin-bottom:8px;padding:12px;font-size:15px;background:var(--info);color:#fff;">🏦 إرجاع إلى الخزينة</button>
+      <button class="btn" data-v="drawer" style="width:100%;margin-bottom:8px;padding:12px;font-size:15px;background:var(--success);color:#fff;">💵 إرجاع إلى الدرج (نقدي)</button>
+      <button class="btn" data-v="debt" style="width:100%;margin-bottom:8px;padding:12px;font-size:15px;background:var(--warning);color:#fff;">⚖️ خصم من مديونية مورد</button>
+      <button class="btn" data-v="cancel" style="width:100%;background:var(--border);">إلغاء</button>
+    </div>
+  </div>
+  <div id="prInvoicePicker" class="modal-overlay" style="display:none;z-index:1300;">
+    <div class="modal" style="max-width:560px;">
+      <h2>اختر فاتورة لخصم المديونية منها</h2>
+      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">الفواتير اللي عليها مديونية مفتوحة:</p>
+      <div id="prInvoicePickerList" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>
+      <button class="btn" data-v="cancel" style="width:100%;background:var(--border);margin-top:10px;">إلغاء</button>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let currentTab = 'sale';
+    let currentSaleId = null;
+    let returnContainerLinks = {};
+    let allProducts = [];
+
+    async function loadReturnCompositions() {
+      returnContainerLinks = {};
+      const links = await window.api.db.all("SELECT * FROM product_compositions");
+      for (const l of links) returnContainerLinks[l.container_id] = { unitId: l.unit_id, unitsPerContainer: l.units_per_container };
+    }
+
+    async function syncReturnContainerStock(unitId) {
+      for (const cid of Object.keys(returnContainerLinks)) {
+        const link = returnContainerLinks[cid];
+        if (link.unitId === unitId) {
+          const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [unitId]);
+          const derived = Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer);
+          await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, cid]);
+        }
+      }
+    }
+
+    async function adjustReturnStock(productId, qtyDelta) {
+      const link = returnContainerLinks[productId];
+      if (link) {
+        await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta * link.unitsPerContainer, link.unitId]);
+        await syncReturnContainerStock(link.unitId);
+      } else {
+        await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta, productId]);
+        await syncReturnContainerStock(productId);
+      }
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.getElementById('tabSale').style.background = tab === 'sale' ? 'var(--primary)' : 'var(--border)';
+      document.getElementById('tabSale').style.color = tab === 'sale' ? '#fff' : 'inherit';
+      document.getElementById('tabPurchase').style.background = tab === 'purchase' ? 'var(--primary)' : 'var(--border)';
+      document.getElementById('tabPurchase').style.color = tab === 'purchase' ? '#fff' : 'inherit';
+      loadReturns();
+    }
+
+    async function loadReturns() {
+      const typeWhere = currentTab === 'purchase' ? "type='purchase'" : "(type IS NULL OR type='sale')";
+      const total = await window.api.db.get(`SELECT COALESCE(SUM(amount),0) as total FROM returns WHERE ${typeWhere}`);
+      const count = await window.api.db.get(`SELECT COUNT(*) as count FROM returns WHERE ${typeWhere}`);
+      document.getElementById('totalReturns').textContent = Number(total.total).toLocaleString();
+      document.getElementById('returnCount').textContent = count.count;
+      const typeSql = currentTab === 'purchase' ? "r.type='purchase'" : "(r.type IS NULL OR r.type='sale')";
+      const rows = await window.api.db.all(`SELECT r.*, p.name as product_name FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE ${typeSql} ORDER BY r.created_at DESC`);
+      document.getElementById('returnsTable').innerHTML = rows.map(r => {
+        const typeLabel = r.type === 'purchase' ? '<span style="color:var(--info)">مشتريات</span>' : '<span style="color:var(--warning)">مبيعات</span>';
+        return `<tr><td>${r.sale_invoice}</td><td>${typeLabel}</td><td>${r.product_name || '-'}</td>
+          <td>${r.quantity}</td><td style="color:var(--danger)">${Number(r.amount).toLocaleString()}</td>
+          <td>${r.reason || '-'}</td><td>${r.created_at}</td>
+          <td class="actions">${window.can('returns','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteReturn(${r.id})">حذف</button>` : ''}</td></tr>`;
+      }).join('');
+    }
+
+    // ====== Sale Returns ======
+    let selectedSaleReturns = [];
+    let currentSaleInvoice = null;
+    let currentSaleRemaining = 0;
+    let currentSaleCustomer = null;
+    let saleInvoiceItems = [];
+
+    async function showReturnModal() {
+      allProducts = await window.api.db.all("SELECT * FROM products ORDER BY name");
+      document.getElementById('returnSearch').value = '';
+      document.getElementById('saleInfo').innerHTML = '';
+      document.getElementById('returnList').innerHTML = '';
+      document.getElementById('returnSelected').innerHTML = '';
+      document.getElementById('returnTotal').textContent = 'الإجمالي: 0';
+      document.getElementById('returnDebtNote').textContent = '';
+      document.getElementById('returnReason').value = 'مقاس غير مناسب';
+      document.getElementById('submitReturnBtn').disabled = true;
+      selectedSaleReturns = [];
+      saleInvoiceItems = [];
+      currentSaleId = null;
+      currentSaleInvoice = null;
+      currentSaleRemaining = 0;
+      currentSaleCustomer = null;
+      document.getElementById('returnModal').style.display = 'flex';
+      renderReturnList();
+      setTimeout(() => document.getElementById('returnSearch').focus(), 100);
+    }
+
+    async function loadSaleInvoice(sale) {
+      currentSaleId = sale.id;
+      currentSaleInvoice = sale.invoice_number;
+      currentSaleRemaining = sale.remaining_amount || 0;
+      const cust = sale.customer_id ? await window.api.db.get("SELECT name FROM customers WHERE id=?", [sale.customer_id]) : null;
+      currentSaleCustomer = cust ? cust.name : null;
+      document.getElementById('saleInfo').innerHTML = `✅ فاتورة <b>${sale.invoice_number}</b> — العميل: ${currentSaleCustomer || '-'} | الإجمالي: ${Number(sale.total_amount).toLocaleString()} | المدفوع: ${Number(sale.paid_amount).toLocaleString()} | متبقي للعميل: <b style="color:var(--danger)">${Number(sale.remaining_amount).toLocaleString()}</b>`;
+      saleInvoiceItems = await window.api.db.all("SELECT si.product_id, si.quantity AS inv_qty, si.price, p.name, p.stock, COALESCE((SELECT SUM(r.quantity) FROM returns r WHERE (r.type='sale' OR r.type IS NULL) AND r.sale_id = si.sale_id AND r.product_id = si.product_id),0) AS returned FROM sale_items si LEFT JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [sale.id]);
+      renderReturnList();
+      updateReturnTotal();
+    }
+
+    function filterReturnList() {
+      renderReturnList();
+    }
+
+    // Unified scanner: product barcode ➜ add from the loaded invoice | invoice number ➜ load invoice
+    async function quickAddSaleReturn() {
+      const input = document.getElementById('returnSearch');
+      const q = input.value.trim();
+      if (!q) return;
+      const ql = q.toLowerCase();
+
+      const prod = allProducts.filter(p => p.barcode && String(p.barcode).toLowerCase() === ql);
+      if (prod.length === 1) { addScannedSaleProduct(prod[0], input); return; }
+
+      const sale = await window.api.db.get("SELECT id, invoice_number, customer_id, total_amount, paid_amount, remaining_amount FROM sales WHERE invoice_number = ? COLLATE NOCASE", [q]);
+      if (sale) { await loadSaleInvoice(sale); input.value = ''; filterReturnList(); input.focus(); return; }
+
+      if (/^p\d+$/i.test(q)) {
+        const byId = allProducts.filter(p => p.id === parseInt(q.slice(1), 10));
+        if (byId.length === 1) { addScannedSaleProduct(byId[0], input); return; }
+      }
+
+      if (/^\d+$/.test(q)) {
+        const bySaleId = await window.api.db.get("SELECT id, invoice_number, customer_id, total_amount, paid_amount, remaining_amount FROM sales WHERE id = ?", [parseInt(q, 10)]);
+        if (bySaleId) { await loadSaleInvoice(bySaleId); input.value = ''; filterReturnList(); input.focus(); return; }
+      }
+
+      if (q.length >= 3) {
+        const partial = await window.api.db.get("SELECT id, invoice_number, customer_id, total_amount, paid_amount, remaining_amount FROM sales WHERE invoice_number LIKE ? ORDER BY created_at DESC LIMIT 1", [`%${q}%`]);
+        if (partial) { await loadSaleInvoice(partial); input.value = ''; filterReturnList(); input.focus(); return; }
+      }
+    }
+
+    function addScannedSaleProduct(p, input) {
+      if (!currentSaleId) { window.showAlert('امسح فاتورة البيع الأول', 'error'); return; }
+      const item = saleInvoiceItems.find(i => i.product_id === p.id);
+      if (!item) { window.showAlert(`"${p.name}" مش في فاتورة ${currentSaleInvoice}`, 'error'); return; }
+      const available = (item.inv_qty || 0) - (item.returned || 0);
+      if (available <= 0) { window.showAlert(`"${p.name}" اترجع بالكامل من الفاتورة (${item.returned}/${item.inv_qty})`, 'error'); return; }
+      addSaleReturnItem(p.id, available, item.price);
+      input.value = '';
+      filterReturnList();
+      input.focus();
+      window.showAlert(`✔ ${p.name} — متاح للإرجاع ${available}`);
+    }
+
+    function renderReturnList() {
+      const container = document.getElementById('returnList');
+      if (!currentSaleId) {
+        container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;">امسح رقم فاتورة البيع لعرض أصنافها</div>';
+        renderSelectedSaleReturns();
+        return;
+      }
+      const q = document.getElementById('returnSearch').value.trim().toLowerCase();
+      const filtered = q ? saleInvoiceItems.filter(i => (i.name || '').toLowerCase().includes(q) || (i.stock != null && String(i.barcode || '').toLowerCase().includes(q))) : saleInvoiceItems;
+      const list = q ? saleInvoiceItems.filter(i => (i.name || '').toLowerCase().includes(q) || (i.barcode && String(i.barcode).toLowerCase().includes(q))) : saleInvoiceItems;
+      if (!list.length) { container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;">لا توجد أصناف مطابقة</div>'; renderSelectedSaleReturns(); return; }
+      container.innerHTML = list.map(i => {
+        const available = (i.inv_qty || 0) - (i.returned || 0);
+        const sel = selectedSaleReturns.find(s => s.id === i.product_id);
+        return `<div data-pid="${i.product_id}" style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:${available > 0 ? 'pointer' : 'not-allowed'};opacity:${available > 0 ? 1 : 0.5};" onmouseover="if(${available > 0})this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'}</span>
+          <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${i.inv_qty} | مرتجع: ${i.returned || 0} | متاح: <b style="color:${available > 0 ? 'var(--info)' : 'var(--danger)'}">${available}</b></span>
+          <span style="font-size:11px;color:var(--text-secondary);">${Number(i.price).toLocaleString()}</span>
+          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+        </div>`;
+      }).join('');
+      container.querySelectorAll('[data-pid]').forEach(el => el.addEventListener('click', () => {
+        const item = saleInvoiceItems.find(i => i.product_id === parseInt(el.dataset.pid));
+        if (!item) return;
+        const available = (item.inv_qty || 0) - (item.returned || 0);
+        if (available <= 0) { window.showAlert('هذا الصنف اترجع بالكامل', 'error'); return; }
+        addSaleReturnItem(item.product_id, available, item.price);
+      }));
+      renderSelectedSaleReturns();
+    }
+
+    function addSaleReturnItem(id, setQty, setPrice) {
+      const item = saleInvoiceItems.find(x => x.product_id === id);
+      if (!item) return;
+      const available = (item.inv_qty || 0) - (item.returned || 0);
+      const existing = selectedSaleReturns.find(s => s.id === id);
+      if (existing) {
+        existing.qty = Math.max(1, setQty != null ? Math.min(setQty, available) : existing.qty);
+        if (setPrice != null) existing.price = setPrice;
+      }
+      else { selectedSaleReturns.push({ id, name: item.name || 'منتج محذوف', qty: Math.max(1, setQty != null ? Math.min(setQty, available) : 1), price: setPrice != null ? setPrice : item.price }); }
+      renderReturnList();
+      updateReturnTotal();
+    }
+
+    function renderSelectedSaleReturns() {
+      const container = document.getElementById('returnSelected');
+      if (selectedSaleReturns.length === 0) { container.innerHTML = ''; return; }
+      const inputStyle = 'text-align:center;padding:4px;border:1px solid var(--border);border-radius:4px;font-size:13px;';
+      container.innerHTML = '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">المنتجات المرتجعة:</div>' +
+        '<div style="display:flex;gap:6px;padding:0 6px 4px;font-size:11px;color:var(--text-secondary);">' +
+          '<span style="flex:1;">المنتج</span>' +
+          '<span style="width:54px;text-align:center;">الكمية</span>' +
+          '<span style="width:78px;text-align:center;">سعر بيع الوحدة</span>' +
+          '<span style="width:70px;text-align:center;">الإجمالي</span>' +
+          '<span style="width:18px;"></span>' +
+        '</div>' +
+        selectedSaleReturns.map((s, i) => `
+          <div style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:4px;margin-bottom:4px;">
+            <span style="flex:1;font-size:13px;">${s.name}</span>
+            <input type="number" value="${s.qty}" min="1" style="width:54px;${inputStyle}" onchange="updateReturnQty(${i}, this.value)">
+            <input type="number" value="${s.price}" min="0" step="0.01" style="width:78px;${inputStyle}color:var(--warning);font-weight:700;" onchange="updateReturnPrice(${i}, this.value)">
+            <span id="srLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Number(s.price * s.qty).toLocaleString()}</span>
+            <button onclick="removeSaleReturnItem(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;width:18px;">✕</button>
+          </div>
+        `).join('');
+    }
+
+    function refreshReturnLineTotal(i) {
+      const s = selectedSaleReturns[i];
+      const el = document.getElementById('srLineTotal' + i);
+      if (s && el) el.textContent = Number(s.price * s.qty).toLocaleString();
+    }
+
+    function updateReturnQty(i, val) {
+      const item = saleInvoiceItems.find(x => x.product_id === selectedSaleReturns[i].id);
+      const max = item ? (item.inv_qty || 0) - (item.returned || 0) : Infinity;
+      let n = Math.max(1, parseInt(val) || 1);
+      if (n > max) { n = Math.max(1, max); window.showAlert(`الحد الأقصى للإرجاع ${max}`, 'error'); }
+      selectedSaleReturns[i].qty = n;
+      refreshReturnLineTotal(i);
+      updateReturnTotal();
+    }
+
+    function updateReturnPrice(i, val) {
+      selectedSaleReturns[i].price = Math.max(0, parseFloat(val) || 0);
+      refreshReturnLineTotal(i);
+      updateReturnTotal();
+    }
+
+    function removeSaleReturnItem(i) {
+      selectedSaleReturns.splice(i, 1);
+      renderReturnList();
+      updateReturnTotal();
+    }
+
+    function updateReturnTotal() {
+      const total = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      document.getElementById('returnTotal').textContent = `الإجمالي: ${total.toLocaleString()}`;
+      const ready = selectedSaleReturns.length > 0 && currentSaleId;
+      document.getElementById('submitReturnBtn').disabled = !ready;
+      const note = document.getElementById('returnDebtNote');
+      if (!selectedSaleReturns.length) { note.textContent = ''; return; }
+      if (currentSaleId) {
+        note.innerHTML = `فاتورة <b>${currentSaleInvoice}</b> (متبقي للعميل ${Number(currentSaleRemaining).toLocaleString()}) — عند التأكيد هتختار خصم من مديونية العميل أو صرف من الدرج أو من الخزينة`;
+      } else {
+        note.innerHTML = 'امسح فاتورة البيع أولاً';
+      }
+    }
+
+    function chooseSaleDestination() {
+      const total = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const count = selectedSaleReturns.length;
+      document.getElementById('srDestTotal').textContent = total.toLocaleString() + ' ' + window.currencySymbol;
+      document.getElementById('srDestItems').textContent = count === 1 ? 'منتج واحد' : `${count} منتجات`;
+      const modal = document.getElementById('srDestinationModal');
+      modal.style.display = 'flex';
+      return new Promise(resolve => {
+        modal.onclick = (e) => {
+          const btn = e.target.closest('button[data-v]');
+          if (!btn) return;
+          modal.style.display = 'none';
+          modal.onclick = null;
+          resolve(btn.dataset.v);
+        };
+      });
+    }
+
+    async function submitSaleReturn() {
+      if (!currentSaleId) { window.showAlert('امسح فاتورة البيع أولاً', 'error'); return; }
+      if (selectedSaleReturns.length === 0) { window.showAlert('اختر منتجات للإرجاع', 'error'); return; }
+      const totalAmount = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const choice = await chooseSaleDestination();
+      if (choice === 'cancel' || !choice) return;
+
+      const sale = await window.api.db.get("SELECT id, invoice_number, remaining_amount FROM sales WHERE id=?", [currentSaleId]);
+      let debtToReduce = 0;
+      let cashTo = choice; // 'drawer' | 'treasury' | 'debt' (الباقي عند 'debt' بيروح الدرج)
+      if (choice === 'debt') {
+        if (sale.remaining_amount < totalAmount) {
+          const rest = totalAmount - sale.remaining_amount;
+          const debtTxt = Number(sale.remaining_amount).toLocaleString();
+          if (sale.remaining_amount <= 0) {
+            if (!await window.showConfirm(`مفيش مديونية على فاتورة ${sale.invoice_number}.<br>المبلغ كله (${totalAmount.toLocaleString()}) هيتصرف من الدرج ككاش للعميل. متابعة؟`)) return;
+          } else {
+            if (!await window.showConfirm(`مديونية فاتورة ${sale.invoice_number} هي ${debtTxt} بس، والمبلغ ${totalAmount.toLocaleString()}.<br>نخصم ${debtTxt} والباقي ${rest.toLocaleString()} يتصرف من الدرج للعميل. متابعة؟`)) return;
+          }
+        }
+        debtToReduce = Math.max(0, Math.min(totalAmount, sale.remaining_amount));
+        cashTo = 'drawer';
+      }
+
+      const baseReason = document.getElementById('returnReason').value;
+      const cashReason = choice === 'debt' ? `إرجاع مبيعات - خصم من فاتورة ${sale.invoice_number}` : `إرجاع مبيعات - صرف ${choice === 'drawer' ? 'من الدرج' : 'من الخزينة'}`;
+      for (const s of selectedSaleReturns) {
+        const lineAmount = s.price * s.qty;
+        const res = await window.api.db.run("INSERT INTO returns (type, sale_id, sale_invoice, product_id, quantity, amount, reason, destination, user_id) VALUES ('sale',?,?,?,?,?,?,?,?)", [sale.id, sale.invoice_number, s.id, s.qty, lineAmount, baseReason, 'مخزون', user.id]);
+        await adjustReturnStock(s.id, s.qty);
+        const share = totalAmount > 0 ? debtToReduce * (lineAmount / totalAmount) : 0;
+        await window.api.db.run("UPDATE returns SET debt_reduced = ? WHERE id = ?", [share, res.lastInsertRowid]);
+        const lineCash = lineAmount - share;
+        if (lineCash > 0) {
+          const ref = `return:${res.lastInsertRowid}`;
+          if (cashTo === 'drawer') await window.api.cash.addDrawerEntry('نقدي', -lineCash, cashReason, ref);
+          else await window.api.cash.addTreasuryEntry(-lineCash, cashReason, ref);
+        }
+      }
+      if (debtToReduce > 0) {
+        await window.api.db.run('UPDATE sales SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtToReduce, sale.id]);
+      }
+      const cashAmount = totalAmount - debtToReduce;
+      closeModal('returnModal');
+      loadReturns();
+      window.showAlert(debtToReduce > 0 ? `تم خصم ${debtToReduce.toLocaleString()} من مديونية العميل` + (cashAmount > 0 ? ` وصرف ${cashAmount.toLocaleString()} كاش من الدرج` : '') : `تم إرجاع ${totalAmount.toLocaleString()} وصرفها من ${cashTo === 'drawer' ? 'الدرج' : 'الخزينة'}`);
+    }
+
+    // ====== Purchase Returns ======
+    let selectedPurchaseReturns = [];
+    let currentPurchaseId = null;
+    let currentPurchaseInvoice = null;
+    let currentPurchaseRemaining = 0;
+
+    async function showPurchaseReturnModal() {
+      document.getElementById('purchaseInvoiceInfo').innerHTML = '';
+      document.getElementById('purchaseInvoiceItems').style.display = 'none';
+      document.getElementById('purchaseReturnSearch').value = '';
+      document.getElementById('purchaseReturnList').innerHTML = '';
+      document.getElementById('purchaseReturnSelected').innerHTML = '';
+      document.getElementById('purchaseReturnTotal').textContent = 'الإجمالي: 0';
+      document.getElementById('purchaseReturnDebtNote').textContent = '';
+      document.getElementById('submitPurchaseReturn').disabled = true;
+      selectedPurchaseReturns = [];
+      currentPurchaseId = null;
+      currentPurchaseInvoice = null;
+      currentPurchaseRemaining = 0;
+      allProducts = await window.api.db.all("SELECT * FROM products ORDER BY name");
+      renderPurchaseReturnList();
+      document.getElementById('purchaseReturnModal').style.display = 'flex';
+      setTimeout(() => document.getElementById('purchaseReturnSearch').focus(), 100);
+    }
+
+    function clearPurchaseInvoice() {
+      currentPurchaseId = null; currentPurchaseInvoice = null; currentPurchaseRemaining = 0;
+      document.getElementById('purchaseInvoiceInfo').innerHTML = '';
+      document.getElementById('purchaseInvoiceItems').style.display = 'none';
+      updatePurchaseReturnTotal();
+    }
+
+    async function loadPurchaseInvoice(pu) {
+      currentPurchaseId = pu.id;
+      currentPurchaseInvoice = pu.invoice_number;
+      currentPurchaseRemaining = pu.remaining_amount || 0;
+      const sup = pu.supplier_id ? await window.api.db.get("SELECT name FROM suppliers WHERE id=?", [pu.supplier_id]) : null;
+      document.getElementById('purchaseInvoiceInfo').innerHTML = `✅ فاتورة <b>${pu.invoice_number}</b> — المورد: ${sup ? sup.name : '-'} | الإجمالي: ${Number(pu.total_amount).toLocaleString()} | المتبقي للمورد: <b style="color:var(--danger)">${Number(pu.remaining_amount).toLocaleString()}</b> &nbsp;<a href="#" onclick="clearPurchaseInvoice();return false;" style="color:var(--danger);font-size:11px;">✕ إلغاء الربط</a>`;
+
+      const items = await window.api.db.all("SELECT pi.product_id, pi.quantity AS inv_qty, pi.buy_price, p.name, p.stock, p.barcode FROM purchase_items pi LEFT JOIN products p ON pi.product_id = p.id WHERE pi.purchase_id = ?", [pu.id]);
+      const itemsBox = document.getElementById('purchaseInvoiceItems');
+      itemsBox.style.display = 'block';
+      itemsBox.innerHTML = '<div style="padding:6px 10px;background:var(--info);color:#fff;font-size:12px;font-weight:700;position:sticky;top:0;">أصناف الفاتورة — اضغط للإضافة:</div>' +
+        (items.length ? items.map(i => {
+          const stock = i.stock || 0;
+          const sel = selectedPurchaseReturns.find(s => s.id === i.product_id);
+          return `<div data-pid="${i.product_id}" style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+            <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'}</span>
+            <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${i.inv_qty} | مخزون: ${stock}</span>
+            <span style="font-size:11px;color:var(--text-secondary);">${Number(i.buy_price).toLocaleString()}</span>
+            ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+          </div>`;
+        }).join('') : '<div style="padding:12px;text-align:center;color:var(--text-secondary);font-size:13px;">لا توجد أصناف في هذه الفاتورة</div>');
+      itemsBox.querySelectorAll('[data-pid]').forEach(el => el.addEventListener('click', () => {
+        const pid = parseInt(el.dataset.pid);
+        const p = allProducts.find(x => x.id === pid);
+        if (!p) { window.showAlert('المنتج غير موجود في الكتالوج', 'error'); return; }
+        addPurchaseReturnItem(pid, p.stock || 0, p.buy_price);
+      }));
+      updatePurchaseReturnTotal();
+    }
+
+    function filterPurchaseReturnProducts() {
+      renderPurchaseReturnList();
+    }
+
+    // Unified scanner handler: product barcode ➜ add item | invoice number ➜ load invoice
+    async function quickAddPurchaseReturn() {
+      const input = document.getElementById('purchaseReturnSearch');
+      const q = input.value.trim();
+      if (!q) return;
+      const ql = q.toLowerCase();
+
+      const prod = allProducts.filter(p => p.barcode && p.barcode.toLowerCase() === ql);
+      if (prod.length === 1) { addScannedProduct(prod[0], input); return; }
+      if (prod.length > 1) { renderPurchaseReturnList(); return; }
+
+      const pu = await window.api.db.get("SELECT id, invoice_number, supplier_id, total_amount, paid_amount, remaining_amount FROM purchases WHERE invoice_number = ? COLLATE NOCASE", [q]);
+      if (pu) { await loadPurchaseInvoice(pu); input.value = ''; filterPurchaseReturnProducts(); input.focus(); return; }
+
+      if (/^p\d+$/i.test(q)) {
+        const byId = allProducts.filter(p => p.id === parseInt(q.slice(1), 10));
+        if (byId.length === 1) { addScannedProduct(byId[0], input); return; }
+      }
+
+      if (/^\d+$/.test(q)) {
+        const byPuId = await window.api.db.get("SELECT id, invoice_number, supplier_id, total_amount, paid_amount, remaining_amount FROM purchases WHERE id = ?", [parseInt(q, 10)]);
+        if (byPuId) { await loadPurchaseInvoice(byPuId); input.value = ''; filterPurchaseReturnProducts(); input.focus(); return; }
+      }
+
+      if (q.length >= 3) {
+        const partial = await window.api.db.get("SELECT id, invoice_number, supplier_id, total_amount, paid_amount, remaining_amount FROM purchases WHERE invoice_number LIKE ? ORDER BY created_at DESC LIMIT 1", [`%${q}%`]);
+        if (partial) { await loadPurchaseInvoice(partial); input.value = ''; filterPurchaseReturnProducts(); input.focus(); return; }
+      }
+    }
+
+    function addScannedProduct(p, input) {
+      const stock = p.stock || 0;
+      if (stock <= 0) { window.showAlert(`مخزون "${p.name}" صفر`, 'error'); return; }
+      addPurchaseReturnItem(p.id, stock, p.buy_price);
+      input.value = '';
+      filterPurchaseReturnProducts();
+      input.focus();
+      window.showAlert(`✔ ${p.name} — الكمية ${stock}`);
+    }
+
+    function renderPurchaseReturnList() {
+      const q = document.getElementById('purchaseReturnSearch').value.trim().toLowerCase();
+      const filtered = q ? allProducts.filter(p => p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q))) : allProducts;
+      const container = document.getElementById('purchaseReturnList');
+      container.innerHTML = filtered.map(p => {
+        const sel = selectedPurchaseReturns.find(s => s.id === p.id);
+        return `<div style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="addPurchaseReturnItem(${p.id})" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <span style="flex:1;font-size:13px;">${p.name}</span>
+          <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">📦 ${p.stock||0}</span>
+          <span style="font-size:11px;color:var(--text-secondary);">${Number(p.buy_price).toLocaleString()}</span>
+          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+        </div>`;
+      }).join('');
+      if (filtered.length === 0) container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;">لا توجد منتجات</div>';
+      renderPurchaseReturnSelected();
+    }
+
+    function addPurchaseReturnItem(id, setQty, setPrice) {
+      const p = allProducts.find(x => x.id === id);
+      if (!p) return;
+      const existing = selectedPurchaseReturns.find(s => s.id === id);
+      if (existing) {
+        if (setQty != null) existing.qty = Math.max(1, setQty); else existing.qty++;
+        if (setPrice != null) existing.price = setPrice;
+      }
+      else { selectedPurchaseReturns.push({ id: p.id, name: p.name, qty: Math.max(1, setQty != null ? setQty : 1), price: setPrice != null ? setPrice : p.buy_price }); }
+      renderPurchaseReturnList();
+      updatePurchaseReturnTotal();
+    }
+
+    function renderPurchaseReturnSelected() {
+      const container = document.getElementById('purchaseReturnSelected');
+      if (selectedPurchaseReturns.length === 0) { container.innerHTML = ''; return; }
+      const inputStyle = 'text-align:center;padding:4px;border:1px solid var(--border);border-radius:4px;font-size:13px;';
+      container.innerHTML = '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">المنتجات المحددة:</div>' +
+        '<div style="display:flex;gap:6px;padding:0 6px 4px;font-size:11px;color:var(--text-secondary);">' +
+          '<span style="flex:1;">المنتج</span>' +
+          '<span style="width:54px;text-align:center;">الكمية</span>' +
+          '<span style="width:78px;text-align:center;">سعر شراء الوحدة</span>' +
+          '<span style="width:70px;text-align:center;">الإجمالي</span>' +
+          '<span style="width:18px;"></span>' +
+        '</div>' +
+        selectedPurchaseReturns.map((s, i) => `
+          <div style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:4px;margin-bottom:4px;">
+            <span style="flex:1;font-size:13px;">${s.name}</span>
+            <input type="number" value="${s.qty}" min="1" style="width:54px;${inputStyle}" onchange="updatePurchaseReturnQty(${i}, this.value)">
+            <input type="number" value="${s.price}" min="0" step="0.01" style="width:78px;${inputStyle}color:var(--primary);font-weight:700;" onchange="updatePurchaseReturnPrice(${i}, this.value)">
+            <span id="prLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Number(s.price * s.qty).toLocaleString()}</span>
+            <button onclick="removePurchaseReturnItem(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;width:18px;">✕</button>
+          </div>
+        `).join('');
+    }
+
+    function refreshPurchaseReturnLineTotal(i) {
+      const s = selectedPurchaseReturns[i];
+      const el = document.getElementById('prLineTotal' + i);
+      if (s && el) el.textContent = Number(s.price * s.qty).toLocaleString();
+    }
+
+    function updatePurchaseReturnQty(i, val) {
+      selectedPurchaseReturns[i].qty = Math.max(1, parseInt(val) || 1);
+      refreshPurchaseReturnLineTotal(i);
+      updatePurchaseReturnTotal();
+    }
+
+    function updatePurchaseReturnPrice(i, val) {
+      selectedPurchaseReturns[i].price = Math.max(0, parseFloat(val) || 0);
+      refreshPurchaseReturnLineTotal(i);
+      updatePurchaseReturnTotal();
+    }
+
+    function removePurchaseReturnItem(i) {
+      selectedPurchaseReturns.splice(i, 1);
+      renderPurchaseReturnList();
+      updatePurchaseReturnTotal();
+    }
+
+    function updatePurchaseReturnTotal() {
+      const total = selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      document.getElementById('purchaseReturnTotal').textContent = `الإجمالي: ${total.toLocaleString()}`;
+      const ready = selectedPurchaseReturns.length > 0;
+      document.getElementById('submitPurchaseReturn').disabled = !ready;
+      const note = document.getElementById('purchaseReturnDebtNote');
+      if (!ready) { note.textContent = ''; return; }
+      if (currentPurchaseId) {
+        note.innerHTML = `فاتورة <b>${currentPurchaseInvoice}</b> (مديونيتها ${Number(currentPurchaseRemaining).toLocaleString()}) — عند التأكيد هتختار الخزينة أو الدرج أو خصم من مديونية المورد`;
+      } else {
+        note.innerHTML = `بدون فاتورة — عند التأكيد هتختار الخزينة أو الدرج أو خصم من مديونية مورد`;
+      }
+    }
+
+    function chooseReturnDestination() {
+      const total = selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const count = selectedPurchaseReturns.length;
+      document.getElementById('prDestTotal').textContent = total.toLocaleString() + ' ' + window.currencySymbol;
+      document.getElementById('prDestItems').textContent = count === 1 ? 'منتج واحد' : `${count} منتجات`;
+      const modal = document.getElementById('prDestinationModal');
+      modal.style.display = 'flex';
+      return new Promise(resolve => {
+        modal.onclick = (e) => {
+          const btn = e.target.closest('button[data-v]');
+          if (!btn) return;
+          modal.style.display = 'none';
+          modal.onclick = null;
+          resolve(btn.dataset.v);
+        };
+      });
+    }
+
+    function pickOutstandingInvoice() {
+      const modal = document.getElementById('prInvoicePicker');
+      const list = document.getElementById('prInvoicePickerList');
+      modal.style.display = 'flex';
+      list.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:13px;">جاري التحميل...</div>';
+      return new Promise(async resolve => {
+        const rows = await window.api.db.all("SELECT p.id, p.invoice_number, p.remaining_amount, s.name AS supplier_name FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.remaining_amount > 0 ORDER BY p.created_at DESC");
+        modal.onclick = async (e) => {
+          const btn = e.target.closest('button[data-v],div[data-pid]');
+          if (!btn) return;
+          const done = (val) => { modal.style.display = 'none'; modal.onclick = null; resolve(val); };
+          if (btn.dataset.v === 'cancel') return done(null);
+          const pid = parseInt(btn.dataset.pid);
+          done(await window.api.db.get("SELECT p.*, s.name AS supplier_name FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.id = ?", [pid]));
+        };
+        if (rows.length === 0) { modal.style.display = 'none'; modal.onclick = null; window.showAlert('لا توجد فواتير شراء عليها مديونية', 'error'); resolve(null); return; }
+        list.innerHTML = rows.map(r => `<div data-pid="${r.id}" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <span style="flex:1;font-size:13px;"><b>${r.invoice_number}</b><br><span style="font-size:11px;color:var(--text-secondary);">${r.supplier_name || '-'}</span></span>
+          <span style="font-size:14px;font-weight:700;color:var(--danger);">${Number(r.remaining_amount).toLocaleString()}</span>
+        </div>`).join('');
+      });
+    }
+
+    async function submitPurchaseReturn() {
+      if (selectedPurchaseReturns.length === 0) { window.showAlert('اختر منتجات للإرجاع', 'error'); return; }
+      let totalAmount = 0;
+      for (const s of selectedPurchaseReturns) totalAmount += s.price * s.qty;
+      const choice = await chooseReturnDestination();
+      if (choice === 'cancel') return;
+
+      let pu = null;
+      let debtToReduce = 0;
+      let toDrawer = false;
+      if (choice === 'debt') {
+        if (currentPurchaseId) pu = await window.api.db.get("SELECT * FROM purchases WHERE id=?", [currentPurchaseId]);
+        if (!pu) pu = await pickOutstandingInvoice();
+        if (!pu) { window.showAlert('اختر فاتورة عليها مديونية لخصم المبلغ منها', 'error'); return; }
+        if (pu.remaining_amount < totalAmount) {
+          const rest = totalAmount - pu.remaining_amount;
+          if (!await window.showConfirm(`مديونية فاتورة ${pu.invoice_number} هي ${Number(pu.remaining_amount).toLocaleString()} بس، والمبلغ ${totalAmount.toLocaleString()}.<br>نخصم ${Number(pu.remaining_amount).toLocaleString()} والباقي ${rest.toLocaleString()} يذهب للخزينة. متابعة؟`)) return;
+        }
+        debtToReduce = Math.min(totalAmount, pu.remaining_amount);
+      } else if (choice === 'drawer') {
+        toDrawer = true;
+      }
+
+      const reason = pu && choice === 'debt' ? `إرجاع مشتريات - خصم من فاتورة ${pu.invoice_number}` : 'إرجاع مشتريات';
+      for (const s of selectedPurchaseReturns) {
+        const lineAmount = s.price * s.qty;
+        const res = await window.api.db.run("INSERT INTO returns (type, purchase_id, sale_invoice, product_id, quantity, amount, reason, destination, user_id) VALUES ('purchase',?,?,?,?,?,?,?,?)", [pu && choice === 'debt' ? pu.id : null, pu && choice === 'debt' ? pu.invoice_number : null, s.id, s.qty, lineAmount, 'إرجاع مشتريات', 'مورد', user.id]);
+        await adjustReturnStock(s.id, -s.qty);
+        const share = totalAmount > 0 ? debtToReduce * (lineAmount / totalAmount) : 0;
+        await window.api.db.run("UPDATE returns SET debt_reduced = ? WHERE id = ?", [share, res.lastInsertRowid]);
+        const lineCash = lineAmount - share;
+        if (lineCash > 0) {
+          if (toDrawer) await window.api.cash.addDrawerEntry('نقدي', lineCash, reason, `return:${res.lastInsertRowid}`);
+          else await window.api.cash.addTreasuryEntry(lineCash, reason, `return:${res.lastInsertRowid}`);
+        }
+      }
+      if (debtToReduce > 0) {
+        await window.api.db.run('UPDATE purchases SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtToReduce, pu.id]);
+      }
+      closeModal('purchaseReturnModal');
+      loadReturns();
+      window.showAlert(choice === 'debt' ? `تم خصم ${debtToReduce.toLocaleString()} من مديونية فاتورة ${pu.invoice_number}` : `تم إرجاع ${totalAmount.toLocaleString()} إلى ${toDrawer ? 'الدرج' : 'الخزينة'}`);
+    }
+
+    async function deleteReturn(id) {
+      if (!await window.showConfirm('هل أنت متأكد؟')) return;
+      const r = await window.api.db.get("SELECT * FROM returns WHERE id=?", [id]);
+      if (r.type === 'purchase') {
+        await adjustReturnStock(r.product_id, r.quantity);
+        const debtReduced = r.debt_reduced || 0;
+        if (debtReduced > 0 && r.purchase_id) {
+          await window.api.db.run('UPDATE purchases SET remaining_amount = remaining_amount + ? WHERE id = ?', [debtReduced, r.purchase_id]);
+        }
+        if (r.amount - debtReduced > 0) {
+          // main owns cash-row cleanup so the running balances stay correct
+          await window.api.cash.deleteByReference(`return:${id}`);
+        }
+      } else {
+        await adjustReturnStock(r.product_id, -r.quantity);
+        const debtReduced = r.debt_reduced || 0;
+        if (debtReduced > 0 && r.sale_id) {
+          await window.api.db.run('UPDATE sales SET remaining_amount = remaining_amount + ? WHERE id = ?', [debtReduced, r.sale_id]);
+        }
+        if (r.amount - debtReduced > 0) {
+          // main owns cash-row cleanup so the running balances stay correct
+          await window.api.cash.deleteByReference(`return:${id}`);
+        }
+      }
+      await window.api.db.run('DELETE FROM returns WHERE id=?', [id]);
+      loadReturns();
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadReturnCompositions();
+    loadReturns();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الإعدادات الأولية - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="setup-page">
+    <div class="setup-box">
+      <h1>مرحباً بك! 👋</h1>
+      <p>قم بإعداد النظام لأول مرة</p>
+      <div id="setupError" style="color: var(--danger); margin-bottom: 15px; display: none;"></div>
+      <form id="setupForm">
+        <div class="form-group">
+          <label>اسم المحل</label>
+          <input type="text" id="shopName" placeholder="أدخل اسم المحل" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>رقم الهاتف</label>
+            <input type="text" id="shopPhone" placeholder="رقم الهاتف">
+          </div>
+          <div class="form-group">
+            <label>نوع الطباعة</label>
+            <select id="printerSize">
+              <option value="80mm">80 مم (عريض)</option>
+              <option value="56mm" selected>56 مم (ضيق)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>اسم المدير</label>
+          <input type="text" id="adminName" value="مدير النظام" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>اسم المستخدم (مدير)</label>
+            <input type="text" id="adminUser" value="admin" required>
+          </div>
+          <div class="form-group">
+            <label>كلمة المرور</label>
+            <input type="password" id="adminPass" placeholder="كلمة المرور" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>توكن تليجرام (اختياري - اتركه فارغاً لتعطيل البوت)</label>
+          <input type="text" id="telegramToken" placeholder="أدخل توكن البوت من BotFather">
+          <small style="color:var(--text-secondary);font-size:12px;">بعد الحفظ، أرسل /start للبوت ليحفظ chat id تلقائياً</small>
+        </div>
+        <button type="submit" class="btn btn-primary">حفظ الإعدادات وبدء الاستخدام</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    document.getElementById('setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorDiv = document.getElementById('setupError');
+
+      const result = await window.api.auth.createAdmin(
+        document.getElementById('adminUser').value,
+        document.getElementById('adminPass').value,
+        document.getElementById('adminName').value
+      );
+
+      if (!result.success) {
+        errorDiv.textContent = result.message;
+        errorDiv.style.display = 'block';
+        return;
+      }
+
+      await window.api.db.setSetting('shop_name', document.getElementById('shopName').value);
+      await window.api.db.setSetting('shop_phone', document.getElementById('shopPhone').value);
+      await window.api.db.setSetting('printer_size', document.getElementById('printerSize').value);
+      await window.api.db.setSetting('telegram_token', document.getElementById('telegramToken').value);
+
+      window.location.href = 'login.html';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>النسخ الاحتياطي - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>النسخ الاحتياطي</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div class="card" style="text-align:center;padding:40px;">
+          <div style="font-size:48px;margin-bottom:16px;">💾</div>
+          <h3 style="margin-bottom:8px;">إنشاء نسخة احتياطية</h3>
+          <p style="color:var(--text-secondary);margin-bottom:20px;">تصدير قاعدة البيانات إلى ملف .db</p>
+          <button class="btn btn-primary" onclick="doBackup()" id="backupBtn">إنشاء النسخة</button>
+          <div id="backupResult" style="margin-top:12px;display:none;"></div>
+        </div>
+        <div class="card" style="text-align:center;padding:40px;">
+          <div style="font-size:48px;margin-bottom:16px;">📂</div>
+          <h3 style="margin-bottom:8px;">استيراد نسخة احتياطية</h3>
+          <p style="color:var(--text-secondary);margin-bottom:20px;">استعادة قاعدة البيانات من ملف</p>
+          <button class="btn btn-warning" onclick="doRestore()" id="restoreBtn">استيراد نسخة</button>
+          <div id="restoreResult" style="margin-top:12px;display:none;"></div>
+        </div>
+      </div>
+      <div class="table-container" style="margin-top:20px;">
+        <div style="padding:16px;font-weight:600;border-bottom:1px solid var(--border);">النسخ الاحتياطية السابقة</div>
+        <table>
+          <thead><tr><th>الملف</th><th>الحجم</th><th>تاريخ الإنشاء</th><th></th></tr></thead>
+          <tbody id="backupsList"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    async function init() {
+      loadBackupFiles();
+    }
+
+    async function loadBackupFiles() {
+      const files = await window.api.backup.list();
+      document.getElementById('backupsList').innerHTML = files.map(f =>
+        `<tr><td>${f.name}</td><td>${(f.size / 1024).toFixed(1)} KB</td><td>${f.date}</td><td></td></tr>`
+      ).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-secondary)">لا توجد نسخ احتياطية</td></tr>';
+    }
+
+    async function doBackup() {
+      const btn = document.getElementById('backupBtn');
+      const result = document.getElementById('backupResult');
+      btn.disabled = true; btn.textContent = '⏳ جاري...';
+      result.style.display = 'none';
+
+      const res = await window.api.backup.create();
+      if (res.success) {
+        result.className = 'notification success';
+        result.textContent = `✅ تم إنشاء ${res.fileName}`;
+      } else {
+        result.className = 'notification error';
+        result.textContent = `❌ فشل: ${res.error}`;
+      }
+      result.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'إنشاء النسخة';
+      loadBackupFiles();
+    }
+
+    async function doRestore() {
+      if (!await window.showConfirm('هل أنت متأكد؟ استعادة النسخة ستحل محل البيانات الحالية!')) return;
+      const filePath = await window.api.backup.selectFile();
+      if (!filePath) return;
+
+      const btn = document.getElementById('restoreBtn');
+      const result = document.getElementById('restoreResult');
+      btn.disabled = true; btn.textContent = '⏳ جاري...';
+      result.style.display = 'none';
+
+      const res = await window.api.backup.restore(filePath);
+      if (res.success) {
+        result.className = 'notification success';
+        result.textContent = '✅ تم الاستيراد. يرجى إعادة تشغيل البرنامج.';
+      } else {
+        result.className = 'notification error';
+        result.textContent = `❌ فشل: ${res.error}`;
+      }
+      result.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'استيراد نسخة';
+    }
+
+    init();
+
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

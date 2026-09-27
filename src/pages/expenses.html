@@ -1,0 +1,205 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>المصروفات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة المصروفات</h2>
+        <button class="btn btn-sm btn-primary" id="addExpenseBtn" onclick="showExpenseModal()" hidden>➕ إضافة مصروف</button>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadExpenses()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>الوصف</th><th>الفئة</th><th>المبلغ</th><th>التاريخ</th><th>الإجراءات</th></tr></thead>
+          <tbody id="expensesTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="expenseModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="modalTitle">إضافة مصروف</h2>
+      <form id="expenseForm">
+        <input type="hidden" id="expenseId">
+        <div class="form-group"><label>الوصف *</label><input type="text" id="eDesc" required></div>
+        <div class="form-row">
+          <div class="form-group"><label>المبلغ *</label><input type="number" id="eAmount" step="0.01" required></div>
+          <div class="form-group"><label>جهة الدفع</label><select id="ePaymentSource" onchange="toggleExpDrawerType()">
+            <option value="drawer">من الدرج</option>
+            <option value="treasury">من الخزينة</option>
+            <option value="">نقدي</option>
+          </select></div>
+          <div class="form-group" id="eDrawerTypeGroup"><label>نوع الدرج</label><select id="eDrawerType">
+            <option value="نقدي">نقدي</option>
+            <option value="فودافون كاش">فودافون كاش</option>
+            <option value="انستاباي">انستاباي</option>
+          </select></div>
+          <div class="form-group"><label>الفئة</label>
+            <select id="eCategory">
+              <option value="ايجار">إيجار</option>
+              <option value="كهرباء">كهرباء</option>
+              <option value="مياه">مياه</option>
+              <option value="رواتب">رواتب</option>
+              <option value="صيانة">صيانة</option>
+              <option value="نقل">نقل</option>
+              <option value="اخري">أخرى</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('expenseModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    // description/category are free text and were written straight into
+    // innerHTML, so a crafted expense could run script as this user.
+    function esc(v) {
+      if (v === null || v === undefined) return '';
+      return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function applyActionGates() {
+      document.getElementById('addExpenseBtn').hidden = !window.can('expenses', 'a');
+    }
+
+    function toggleExpDrawerType() {
+      document.getElementById('eDrawerTypeGroup').style.display = document.getElementById('ePaymentSource').value === 'drawer' ? 'flex' : 'none';
+    }
+
+    async function loadExpenses() {
+      const q = document.getElementById('searchInput').value;
+      // No JOIN users here: SQL_BLOCKED_TABLES denies it, and the user name was
+      // never rendered anyway, so the whole list used to come back empty.
+      let sql = "SELECT * FROM expenses WHERE 1=1";
+      let params = [];
+      if (q) { sql += " AND (description LIKE ? OR category LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+      sql += " ORDER BY created_at DESC";
+      const expenses = await window.api.db.all(sql, params);
+      document.getElementById('expensesTable').innerHTML = expenses.map(e =>
+        `<tr><td>${esc(e.description)}</td><td>${esc(e.category) || '-'}</td>
+          <td style="color:var(--danger);font-weight:700">${Number(e.amount).toLocaleString()}</td>
+          <td>${esc(e.created_at)}</td>
+          <td class="actions">
+            ${window.can('expenses','e') ? `<button class="btn btn-sm btn-primary" onclick="editExpense(${e.id})">تعديل</button>` : ''}
+            ${window.can('expenses','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteExpense(${e.id})">حذف</button>` : ''}
+          </td></tr>`
+      ).join('');
+    }
+
+    function showExpenseModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة مصروف';
+      document.getElementById('expenseForm').reset();
+      document.getElementById('expenseId').value = '';
+      document.getElementById('ePaymentSource').value = 'drawer';
+      toggleExpDrawerType();
+      document.getElementById('expenseModal').style.display = 'flex';
+    }
+
+    async function editExpense(id) {
+      const e = await window.api.db.get("SELECT * FROM expenses WHERE id = ?", [id]);
+      if (!e) { window.showAlert('المصروف مش موجود', 'error'); return; }
+      document.getElementById('modalTitle').textContent = 'تعديل مصروف';
+      document.getElementById('expenseForm').reset();
+      document.getElementById('expenseId').value = e.id;
+      document.getElementById('eDesc').value = e.description;
+      document.getElementById('eAmount').value = e.amount;
+      document.getElementById('eCategory').value = e.category || 'اخري';
+      // Must load the recorded pool, otherwise saving would move the money
+      // out of whichever source the select happens to be showing.
+      document.getElementById('ePaymentSource').value = e.payment_source || 'none';
+      document.getElementById('eDrawerType').value = e.drawer_type || 'نقدي';
+      toggleExpDrawerType();
+      document.getElementById('expenseModal').style.display = 'flex';
+    }
+
+    document.getElementById('expenseForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('expenseId').value;
+      const desc = document.getElementById('eDesc').value.trim();
+      const amount = parseFloat(document.getElementById('eAmount').value);
+      const category = document.getElementById('eCategory').value;
+      const paymentSource = document.getElementById('ePaymentSource').value || 'none';
+
+      if (!desc) { window.showAlert('اكتب وصف المصروف', 'error'); return; }
+      if (!Number.isFinite(amount) || amount <= 0) { window.showAlert('المبلغ لازم يكون رقم أكبر من صفر', 'error'); return; }
+
+      const payload = {
+        id: id || null,
+        description: desc,
+        amount,
+        category,
+        source: paymentSource,
+        drawerType: paymentSource === 'drawer' ? document.getElementById('eDrawerType').value : null,
+      };
+
+      const submitBtn = document.querySelector('#expenseForm button[type=submit]');
+      submitBtn.disabled = true;
+      try {
+        // The main process writes the row and moves the money in one
+        // transaction, so there is no half-saved expense any more.
+        const res = await window.api.saveExpense(payload);
+        if (!id) await window.api.telegram.sendNotification('expense', { description: desc, amount });
+        closeModal('expenseModal');
+        reload();
+        window.showAlert(res.success ? 'تم حفظ المصروف' : 'حصلت مشكلة', 'success');
+      } catch (err) {
+        window.showAlert(err.message || 'حصلت مشكلة', 'error');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    async function deleteExpense(id) {
+      if (!await window.showConfirm('هل أنت متأكد؟')) return;
+      try {
+        // Returns the money the expense took, in the same transaction.
+        await window.api.deleteExpense(id);
+        reload();
+      } catch (err) {
+        window.showAlert(err.message || 'حصلت مشكلة', 'error');
+      }
+    }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    // sidebar.js is what defines window.can, and it loads after this script,
+    // so the gates have to wait until the document has finished parsing.
+    // A rejected load used to leave a silently empty table, which is how the
+    // blocked JOIN went unnoticed. Say so instead.
+    async function reload() {
+      try { await loadExpenses(); }
+      catch (e) {
+        console.error('loadExpenses failed', e);
+        document.getElementById('expensesTable').innerHTML =
+          `<tr><td colspan="5" style="text-align:center;color:var(--danger)">تعذر تحميل المصروفات: ${esc(e.message)}</td></tr>`;
+      }
+    }
+    document.addEventListener('DOMContentLoaded', applyActionGates);
+    reload();
+
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

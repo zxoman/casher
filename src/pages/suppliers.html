@@ -1,0 +1,192 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الموردين - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة الموردين</h2>
+        <button class="btn btn-sm btn-primary" id="addSupplierBtn" onclick="showSupplierModal()" style="${window.can('suppliers','a')?'':'display:none'}">➕ إضافة مورد</button>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadSuppliers()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>الاسم</th><th>الهاتف</th><th>البريد</th><th>العنوان</th><th>المديونية</th><th>الإجراءات</th></tr></thead>
+          <tbody id="suppliersTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="supplierModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="modalTitle">إضافة مورد</h2>
+      <form id="supplierForm">
+        <input type="hidden" id="supplierId">
+        <div class="form-row">
+          <div class="form-group"><label>الاسم *</label><input type="text" id="sName" required></div>
+          <div class="form-group"><label>الهاتف</label><input type="text" id="sPhone"></div>
+        </div>
+        <div class="form-group"><label>البريد الإلكتروني</label><input type="email" id="sEmail"></div>
+        <div class="form-group"><label>العنوان</label><input type="text" id="sAddress"></div>
+        <div class="form-group"><label>ملاحظات</label><textarea id="sNotes" rows="2"></textarea></div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('supplierModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <div id="paymentModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:600px;">
+      <h2 id="paymentModalTitle">تسديد ديون</h2>
+      <p id="paymentSupplierName" style="color:var(--text-muted);margin-bottom:12px;"></p>
+      <input type="hidden" id="paymentSupplierId">
+      <div id="paymentInvoices"></div>
+      <div style="display:flex;justify-content:space-between;padding:12px 0;font-weight:700;border-top:1px solid var(--border);margin-top:8px;">
+        <span>المتبقي الكلي:</span>
+        <span id="paymentTotalRemaining">0</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;">
+        <span>المدفوع الآن:</span>
+        <span id="paymentTotalPaid">0</span>
+      </div>
+      <button class="btn btn-primary" onclick="submitPayment()" style="width:100%;margin-top:12px;">تأكيد التسديد</button>
+      <button type="button" class="btn" style="background:var(--border);margin-top:8px;width:100%;" onclick="closeModal('paymentModal')">إلغاء</button>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    async function loadSuppliers() {
+      const q = document.getElementById('searchInput').value;
+      let sql = "SELECT * FROM suppliers WHERE 1=1";
+      let params = [];
+      if (q) { sql += " AND (name LIKE ? OR phone LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+      sql += " ORDER BY name";
+      const suppliers = await window.api.db.all(sql, params);
+      const rows = await Promise.all(suppliers.map(async (s) => {
+        const debt = await window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as total FROM purchases WHERE supplier_id=? AND remaining_amount>0", [s.id]);
+        return `<tr>
+          <td>${s.name}</td>
+          <td>${s.phone || '-'}</td>
+          <td>${s.email || '-'}</td>
+          <td>${s.address || '-'}</td>
+          <td style="color:${debt.total>0?'var(--danger)':'var(--success)'};font-weight:700">${Number(debt.total).toLocaleString()}</td>
+          <td class="actions">
+            ${window.can('suppliers','e')?`<button class="btn btn-sm btn-primary" onclick="editSupplier(${s.id})">تعديل</button>`:''}
+            ${debt.total>0?`<button class="btn btn-sm btn-success" onclick="showPaymentModal(${s.id},'${s.name}')" ${window.can('suppliers','settle')?'':'style="display:none"'}>تسديد</button>`:''}
+            ${window.can('suppliers','d')?`<button class="btn btn-sm btn-danger" onclick="deleteSupplier(${s.id})">حذف</button>`:''}
+          </td></tr>`;
+      }));
+      document.getElementById('suppliersTable').innerHTML = rows.join('');
+    }
+
+    function showSupplierModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة مورد';
+      document.getElementById('supplierForm').reset();
+      document.getElementById('supplierId').value = '';
+      document.getElementById('supplierModal').style.display = 'flex';
+    }
+
+    async function editSupplier(id) {
+      const s = await window.api.db.get("SELECT * FROM suppliers WHERE id = ?", [id]);
+      document.getElementById('modalTitle').textContent = 'تعديل مورد';
+      document.getElementById('supplierId').value = s.id;
+      document.getElementById('sName').value = s.name;
+      document.getElementById('sPhone').value = s.phone || '';
+      document.getElementById('sEmail').value = s.email || '';
+      document.getElementById('sAddress').value = s.address || '';
+      document.getElementById('sNotes').value = s.notes || '';
+      document.getElementById('supplierModal').style.display = 'flex';
+    }
+
+    document.getElementById('supplierForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('supplierId').value;
+      const data = [document.getElementById('sName').value, document.getElementById('sPhone').value, document.getElementById('sEmail').value, document.getElementById('sAddress').value, document.getElementById('sNotes').value];
+      if (id) { await window.api.db.run('UPDATE suppliers SET name=?, phone=?, email=?, address=?, notes=? WHERE id=?', [...data, id]); }
+      else { await window.api.db.run('INSERT INTO suppliers (name, phone, email, address, notes) VALUES (?,?,?,?,?)', data); }
+      closeModal('supplierModal');
+      loadSuppliers();
+    });
+
+    async function deleteSupplier(id) { if (!await window.showConfirm('هل أنت متأكد؟')) return; await window.api.db.run('DELETE FROM suppliers WHERE id = ?', [id]); loadSuppliers(); }
+
+    async function showPaymentModal(supplierId, supplierName) {
+      document.getElementById('paymentModalTitle').textContent = 'تسديد ديون';
+      document.getElementById('paymentSupplierName').textContent = `المورد: ${supplierName}`;
+      document.getElementById('paymentSupplierId').value = supplierId;
+      const invoices = await window.api.db.all("SELECT id, invoice_number, total_amount, paid_amount, remaining_amount FROM purchases WHERE supplier_id=? AND remaining_amount>0 ORDER BY created_at ASC", [supplierId]);
+      let html = '<table><thead><tr><th>رقم الفاتورة</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>المدفوع الآن</th></tr></thead><tbody>';
+      let totalRemaining = 0;
+      invoices.forEach((inv, i) => {
+        totalRemaining += inv.remaining_amount;
+        html += `<tr>
+          <td>${inv.invoice_number}</td>
+          <td>${Number(inv.total_amount).toLocaleString()}</td>
+          <td>${Number(inv.paid_amount).toLocaleString()}</td>
+          <td style="color:var(--danger);font-weight:700">${Number(inv.remaining_amount).toLocaleString()}</td>
+          <td><input type="number" class="payment-input" data-id="${inv.id}" data-remaining="${inv.remaining_amount}" min="0" max="${inv.remaining_amount}" step="0.01" value="0" style="width:100px;" oninput="updatePaymentTotal()"></td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('paymentInvoices').innerHTML = html;
+      document.getElementById('paymentTotalRemaining').textContent = totalRemaining.toLocaleString();
+      document.getElementById('paymentTotalPaid').textContent = '0';
+      document.getElementById('paymentModal').style.display = 'flex';
+    }
+
+    function updatePaymentTotal() {
+      const inputs = document.querySelectorAll('.payment-input');
+      let total = 0;
+      inputs.forEach(inp => total += parseFloat(inp.value) || 0);
+      document.getElementById('paymentTotalPaid').textContent = total.toLocaleString();
+    }
+
+    async function submitPayment() {
+      const inputs = document.querySelectorAll('.payment-input');
+      const payments = [];
+      let totalPaid = 0;
+      for (const inp of inputs) {
+        const amount = parseFloat(inp.value) || 0;
+        if (amount <= 0) continue;
+        const remaining = parseFloat(inp.dataset.remaining) || 0;
+        const payAmount = Math.min(amount, remaining);
+        if (payAmount <= 0) continue;
+        payments.push({ kind: 'purchase', id: parseInt(inp.dataset.id), amount: payAmount });
+        totalPaid += payAmount;
+      }
+      if (totalPaid === 0) { window.showAlert('أدخل المبلغ المدفوع أولاً', 'error'); return; }
+      // Runs in main under the suppliers.settle permission, in one transaction.
+      // Paying a supplier is money leaving the treasury, so main does that leg.
+      const res = await window.api.ops.settleDebt('supplier', payments);
+      if (!res.success) { window.showAlert(res.message, 'error'); return; }
+      closeModal('paymentModal');
+      loadSuppliers();
+      window.showAlert(`تم تسجيل تسديد بقيمة ${res.total.toLocaleString()}`);
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadSuppliers();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

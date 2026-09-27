@@ -1,0 +1,269 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>إدارة المستخدمين - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .perms-grid { display:grid;grid-template-columns:repeat(5,1fr);gap:4px;font-size:12px;align-items:center;margin-bottom:4px; }
+    .perms-grid label { font-size:11px;display:flex;align-items:center;gap:3px; }
+    .perms-grid input { width:16px;height:16px; }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة المستخدمين</h2>
+        <button class="btn btn-sm btn-primary" onclick="showUserModal()">➕ إضافة مستخدم</button>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الصلاحية</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>الإجراءات</th></tr></thead>
+          <tbody id="usersTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="userModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:700px;">
+      <h2 id="modalTitle">إضافة مستخدم</h2>
+      <form id="userForm">
+        <input type="hidden" id="userId">
+        <div class="form-row">
+          <div class="form-group"><label>الاسم الكامل *</label><input type="text" id="uFullName" required></div>
+          <div class="form-group"><label>اسم المستخدم *</label><input type="text" id="uUsername" required></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>كلمة المرور</label><input type="password" id="uPassword" placeholder="أدخل كلمة المرور"></div>
+          <div class="form-group"><label>تأكيد كلمة المرور</label><input type="password" id="uPasswordConfirm" placeholder="أعد إدخال كلمة المرور"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>الصلاحية</label>
+            <select id="uRole" onchange="togglePermissions()">
+              <option value="admin">مدير</option>
+              <option value="cashier">كاشير</option>
+              <option value="store">مخزني</option>
+            </select>
+          </div>
+          <div class="form-group" id="activeGroup" style="display:none;"><label><input type="checkbox" id="uActive" checked> مفعل</label></div>
+        </div>
+        <div id="permissionsSection" style="display:none;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;">
+          <div style="font-weight:600;margin-bottom:4px;">🔒 صلاحيات الصفحات</div>
+          <div id="permHeader" class="perms-grid" style="font-weight:600;"></div>
+          <div id="permissionsContainer"></div>
+          <div style="font-weight:600;margin:10px 0 4px;font-size:12px;color:var(--text-muted);">⚙️ صلاحيات مخصّصة (حركات حسّاسة)</div>
+          <div id="extrasContainer"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('userModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <div id="passwordModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2>تغيير كلمة المرور</h2>
+      <form id="passwordForm">
+        <input type="hidden" id="resetUserId">
+        <div class="form-group"><label>كلمة المرور الجديدة *</label><input type="password" id="newPassword" required></div>
+        <div class="form-group"><label>تأكيد كلمة المرور *</label><input type="password" id="newPasswordConfirm" required></div>
+        <button type="submit" class="btn btn-primary">تغيير</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('passwordModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+    if (user.role !== 'admin') { window.location.href = 'pos.html'; throw new Error('admin required'); }
+
+    // Defined locally because sidebar.js loads after this script runs.
+    const esc = v => (v === null || v === undefined) ? '' : String(v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    // Schema + labels come from main, so the UI can never drift from enforcement.
+    let permSchema = null;
+    let permDefaults = {};
+
+    function buildPermsHTML(perms) {
+      if (!permSchema) return '';
+      const cols = permSchema.baseLabels; // { v,a,e,d }
+      // widest row decides the column count so the grid stays aligned
+      let width = 1;
+      permSchema.modules.forEach(m => { width = Math.max(width, 1 + m.base.length); });
+
+      let header = '<span>الصفحة</span>';
+      ['v','a','e','d'].slice(0, width - 1).forEach(k => { header += `<span>${cols[k] || k}</span>`; });
+      document.getElementById('permHeader').innerHTML = header;
+
+      let html = '';
+      permSchema.modules.forEach(m => {
+        const pp = perms[m.key] || permDefaults[m.key] || {};
+        html += `<div class="perms-grid"><span>${window.esc(m.label)}</span>`;
+        m.base.forEach(action => {
+          html += `<label title="${window.esc(cols[action] || action)}"><input type="checkbox" data-page="${m.key}" data-action="${action}" ${pp[action] ? 'checked' : ''}></label>`;
+        });
+        // pad short rows so borders line up
+        for (let k = m.base.length; k < width - 1; k++) html += '<span></span>';
+        html += '</div>';
+      });
+
+      // extras: standalone permissions with their own labels
+      let extras = '';
+      permSchema.modules.forEach(m => {
+        const keys = Object.keys(m.extras || {});
+        if (!keys.length) return;
+        extras += `<div class="perms-grid" style="grid-template-columns:1fr;margin-bottom:6px;">`;
+        extras += `<div style="font-size:12px;font-weight:700;margin-bottom:2px;">${window.esc(m.label)}</div>`;
+        keys.forEach(k => {
+          const on = (perms[m.key] && perms[m.key][k]) ? 'checked' : '';
+          extras += `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" data-page="${m.key}" data-action="${k}" ${on}> ${window.esc(m.extras[k])}</label>`;
+        });
+        extras += '</div>';
+      });
+      document.getElementById('extrasContainer').innerHTML = extras;
+      return html;
+    }
+
+    function getPermissionsFromForm() {
+      const perms = JSON.parse(JSON.stringify(permDefaults));
+      document.querySelectorAll('#permissionsContainer input[type="checkbox"], #extrasContainer input[type="checkbox"]').forEach(cb => {
+        if (!perms[cb.dataset.page]) perms[cb.dataset.page] = {};
+        perms[cb.dataset.page][cb.dataset.action] = cb.checked;
+      });
+      return perms;
+    }
+
+    async function loadPermSchema() {
+      const s = await window.api.auth.getPermissionSchema();
+      permSchema = s;
+      permDefaults = s.defaults;
+    }
+
+    function togglePermissions() {
+      const role = document.getElementById('uRole').value;
+      document.getElementById('permissionsSection').style.display = role === 'admin' ? 'none' : 'block';
+    }
+
+    async function loadUsers() {
+      if (!permSchema) await loadPermSchema();
+      const users = await window.api.auth.getUsers();
+      document.getElementById('usersTable').innerHTML = users.map(u =>
+        `<tr>
+          <td>${esc(u.full_name)}</td>
+          <td>${esc(u.username)}</td>
+          <td>${u.role === 'admin' ? 'مدير' : u.role === 'cashier' ? 'كاشير' : 'مخزني'}</td>
+          <td style="color:${u.is_active ? 'var(--success)' : 'var(--danger)'}">${u.is_active ? 'نشط' : 'غير نشط'}</td>
+          <td>${esc(u.created_at)}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-primary" onclick="editUser(${u.id})">تعديل</button>
+            <button class="btn btn-sm btn-warning" onclick="showPasswordModal(${u.id})">🔑 كلمة المرور</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">حذف</button>
+          </td>
+        </tr>`
+      ).join('');
+    }
+
+    function showUserModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة مستخدم';
+      document.getElementById('userForm').reset();
+      document.getElementById('userId').value = '';
+      document.getElementById('uPassword').required = true;
+      document.getElementById('uPassword').placeholder = 'كلمة المرور';
+      document.getElementById('uPasswordConfirm').required = true;
+      document.getElementById('activeGroup').style.display = 'none';
+      document.getElementById('uRole').value = 'cashier';
+      document.getElementById('permissionsContainer').innerHTML = buildPermsHTML({});
+      togglePermissions();
+      document.getElementById('userModal').style.display = 'flex';
+    }
+
+    async function editUser(id) {
+      const users = await window.api.auth.getUsers();
+      const u = users.find(x => x.id === id);
+      document.getElementById('modalTitle').textContent = 'تعديل مستخدم';
+      document.getElementById('userId').value = u.id;
+      document.getElementById('uFullName').value = u.full_name;
+      document.getElementById('uUsername').value = u.username;
+      document.getElementById('uRole').value = u.role;
+      document.getElementById('uPassword').required = false;
+      document.getElementById('uPassword').placeholder = 'اتركه فارغاً إذا لم ترد التغيير';
+      document.getElementById('uPasswordConfirm').required = false;
+      document.getElementById('uActive').checked = u.is_active === 1;
+      document.getElementById('activeGroup').style.display = 'block';
+      const perms = u.permissions ? JSON.parse(u.permissions) : {};
+      document.getElementById('permissionsContainer').innerHTML = buildPermsHTML(perms);
+      togglePermissions();
+      document.getElementById('userModal').style.display = 'flex';
+    }
+
+    document.getElementById('userForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('userId').value;
+      const fullName = document.getElementById('uFullName').value;
+      const username = document.getElementById('uUsername').value;
+      const role = document.getElementById('uRole').value;
+      const password = document.getElementById('uPassword').value;
+      const passwordConfirm = document.getElementById('uPasswordConfirm').value;
+      const permissions = getPermissionsFromForm();
+
+      if (id) {
+        const isActive = document.getElementById('uActive').checked;
+        const result = await window.api.auth.updateUser(id, username, role, fullName, isActive, permissions);
+        if (result.success && password && password === passwordConfirm) {
+          await window.api.auth.resetPassword(id, password);
+        }
+      } else {
+        if (!password) { window.showAlert('كلمة المرور مطلوبة', 'error'); return; }
+        if (password !== passwordConfirm) { window.showAlert('كلمة المرور غير متطابقة', 'error'); return; }
+        const result = await window.api.auth.createUser(username, password, role, fullName, permissions);
+        if (!result.success) { window.showAlert(result.message, 'error'); return; }
+      }
+      closeModal('userModal');
+      loadUsers();
+    });
+
+    function showPasswordModal(id) {
+      document.getElementById('resetUserId').value = id;
+      document.getElementById('passwordForm').reset();
+      document.getElementById('passwordModal').style.display = 'flex';
+    }
+
+    document.getElementById('passwordForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('resetUserId').value;
+      const pass = document.getElementById('newPassword').value;
+      const confirm = document.getElementById('newPasswordConfirm').value;
+      if (pass !== confirm) { window.showAlert('كلمة المرور غير متطابقة', 'error'); return; }
+      await window.api.auth.resetPassword(id, pass);
+      closeModal('passwordModal');
+      window.showAlert('تم تغيير كلمة المرور');
+    });
+
+    async function deleteUser(id) {
+      if (!await window.showConfirm('هل أنت متأكد من حذف هذا المستخدم؟')) return;
+      const result = await window.api.auth.deleteUser(id);
+      if (!result.success) { window.showAlert(result.message, 'error'); return; }
+      loadUsers();
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadUsers();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

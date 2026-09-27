@@ -1,0 +1,62 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>تسجيل الدخول - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-box">
+      <h1>نظام الكاشير</h1>
+      <p>تسجيل الدخول إلى النظام</p>
+      <div id="loginError" style="color: var(--danger); margin-bottom: 15px; display: none;"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label>اسم المستخدم</label>
+          <input type="text" id="username" placeholder="أدخل اسم المستخدم" required autofocus>
+        </div>
+        <div class="form-group">
+          <label>كلمة المرور</label>
+          <input type="password" id="password" placeholder="أدخل كلمة المرور" required>
+        </div>
+        <button type="submit" class="btn btn-primary">تسجيل الدخول</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    // The app now logs out when it closes, so a leftover copy in localStorage is
+    // always stale. Ask the main process, which is the only authority, and wipe
+    // the renderer's copy when there is no live session. Without this a hard kill
+    // (where before-quit never runs) would leave the sidebar thinking it is signed in.
+    window.api.auth.me().then(u => {
+      if (!u) {
+        localStorage.removeItem('user');
+        localStorage.removeItem('loginTime');
+      }
+    }).catch(() => {
+      localStorage.removeItem('user');
+      localStorage.removeItem('loginTime');
+    });
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const errorDiv = document.getElementById('loginError');
+
+      const result = await window.api.auth.login(username, password);
+      if (result.success) {
+        // result.user is already stripped of the password hash by the main process.
+        localStorage.setItem('user', JSON.stringify(result.user));
+        localStorage.setItem('loginTime', new Date().toISOString());
+        window.location.href = 'pos.html';
+      } else {
+        errorDiv.textContent = result.message;
+        errorDiv.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

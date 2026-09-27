@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { margin: 0; size: 80mm auto; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Courier New', monospace; width: 72mm; padding: 3mm 4mm; font-size: 12px; }
+  body.narrow { width: 48mm; font-size: 10px; }
+  .header { text-align: center; margin-bottom: 8px; }
+  .header h2 { font-size: 20px; margin-bottom: 3px; }
+  .header .info { font-size: 11px; color: #555; }
+  .divider { border-top: 1px dashed #000; margin: 6px 0; }
+  .divider-solid { border-top: 1px solid #000; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead { border-bottom: 2px solid #000; }
+  th { text-align: right; padding: 5px 2px; font-size: 12px; font-weight: bold; }
+  td { padding: 5px 2px; vertical-align: top; border-bottom: 1px dotted #aaa; }
+  tr:last-child td { border-bottom: none; }
+  .item-name { text-align: right; font-weight: bold; }
+  .item-qty { text-align: center; }
+  .item-price { text-align: left; direction: ltr; }
+  .item-row-alt td { background: #f5f5f5; }
+  .totals-box { border: 2px solid #000; padding: 6px 6px; margin-top: 5px; }
+  .totals-box .line { display: flex; justify-content: space-between; padding: 4px 2px; font-size: 13px; }
+  .totals-box .line .label { font-weight: bold; }
+  .totals-box .line .value { font-weight: bold; }
+  .totals-box .line.paid { background: #e6f7e6; padding: 4px 2px; margin: 2px 0; }
+  .totals-box .line.paid .value { color: #0a0; }
+  .totals-box .line.remaining { background: #ffe6e6; padding: 4px 2px; margin: 2px 0; }
+  .totals-box .line.remaining .value { color: #c00; }
+  .totals-box .grand { font-size: 16px; font-weight: bold; border-top: 2px double #000; padding-top: 5px; margin-top: 3px; }
+  .totals-box .grand .value { font-size: 18px; }
+  .payment-info { font-size: 11px; font-weight: bold; color: #000; margin: 5px 0; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h2 id="shopName">الكاشير</h2>
+    <div id="shopPhone" style="font-size:13px;font-weight:bold;color:#000;margin-bottom:2px;"></div>
+    <div class="info" id="invoiceDate"></div>
+    <div class="divider-solid"></div>
+    <div class="info" style="font-size:11px;font-weight:bold;">فاتورة بيع</div>
+    <div class="info">رقم: <span id="invoiceNum" style="font-weight:bold;"></span></div>
+    <div class="info" id="customerInfo"></div>
+    <div class="info" id="cashierInfo"></div>
+  </div>
+  <div class="divider"></div>
+  <table>
+    <thead><tr><th style="text-align:right">الصنف</th><th class="item-qty">الكمية</th><th class="item-price">السعر</th><th class="item-price">الإجمالي</th></tr></thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+  <div class="divider"></div>
+  <div class="totals-box">
+    <div class="line"><span class="label">إجمالي الفاتورة</span><span class="value" id="totalDisplay"></span></div>
+    <div class="line" id="discountLine" style="display:none;"><span class="label">الخصم</span><span class="value" id="discountDisplay" style="color:#c00;"></span></div>
+    <div class="line"><span class="label">بعد الخصم</span><span class="value" id="afterDiscountDisplay"></span></div>
+    <div class="line"><span class="label">طريقة الدفع</span><span class="value" id="methodDisplay"></span></div>
+    <div class="line" id="paymentBreakdownLine" style="display:none;"><span class="label">التفاصيل</span><span class="value" id="paymentBreakdownDisplay" style="font-size:11px;"></span></div>
+    <div class="line paid"><span class="label">المدفوع</span><span class="value" id="paidDisplay"></span></div>
+    <div class="line remaining" id="remainingLine"><span class="label">المتبقي</span><span class="value" id="remainingDisplay"></span></div>
+    <div class="line grand"><span class="label">الصافي</span><span class="value" id="grandTotal"></span></div>
+  </div>
+  <div class="divider"></div>
+  <div class="payment-info" id="paymentSummary"></div>
+  <div style="text-align:left;margin:5px 0;"><canvas id="barcodeCanvas"></canvas></div>
+
+  <script src="./js/JsBarcode.all.min.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const printer = params.get('printer') || '80mm';
+    const shopName = params.get('shop') || 'الكاشير';
+    const phone = params.get('phone') || '';
+    const method = params.get('method') || 'نقدي';
+    const customer = params.get('customer') || '';
+    const cashier = params.get('cashier') || '';
+
+    document.getElementById('shopName').textContent = shopName;
+    document.getElementById('shopPhone').textContent = phone ? `هاتف: ${phone}` : '';
+    if (printer === '56mm') document.body.classList.add('narrow');
+
+    document.getElementById('invoiceNum').textContent = params.get('invoice');
+    document.getElementById('methodDisplay').textContent = method;
+
+    if (customer) document.getElementById('customerInfo').textContent = `العميل: ${customer}`;
+    if (cashier) document.getElementById('cashierInfo').textContent = `الكاشير: ${cashier}`;
+
+    const total = parseFloat(params.get('total')) || 0;
+    const paid = parseFloat(params.get('paid')) || 0;
+    const remaining = Math.max(0, total - paid);
+    const discount = parseFloat(params.get('discount')) || 0;
+    const discountPct = parseFloat(params.get('discountPct')) || 0;
+    const grossTotal = total + discount;
+
+    document.getElementById('totalDisplay').textContent = grossTotal.toFixed(2);
+    if (discount > 0) {
+      document.getElementById('discountLine').style.display = 'flex';
+      document.getElementById('discountDisplay').textContent = '-' + discount.toFixed(2) + (discountPct > 0 ? ` (${discountPct.toFixed(1)}%)` : '');
+    }
+    document.getElementById('afterDiscountDisplay').textContent = total.toFixed(2);
+    document.getElementById('paidDisplay').textContent = paid.toFixed(2);
+    document.getElementById('remainingDisplay').textContent = remaining.toFixed(2);
+    document.getElementById('grandTotal').textContent = total.toFixed(2);
+
+    const paymentBreakdown = params.get('payment_breakdown');
+    if (paymentBreakdown) {
+      try {
+        const bd = JSON.parse(paymentBreakdown);
+        const entries = Object.entries(bd).filter(([, v]) => v > 0);
+        if (entries.length > 1) {
+          const labels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+          document.getElementById('paymentBreakdownLine').style.display = 'flex';
+          document.getElementById('paymentBreakdownDisplay').innerHTML = entries.map(([k, v]) => `${labels[k]||k}:${v.toFixed(2)}`).join(' | ');
+        }
+      } catch(e) {}
+    }
+
+    if (remaining === 0) {
+      document.getElementById('remainingLine').style.display = 'none';
+    }
+
+    document.getElementById('paymentSummary').textContent =
+      remaining > 0 ? `باقي ${remaining.toFixed(2)} من إجمالي ${total.toFixed(2)}` : 'مدفوع بالكامل';
+
+    const saleDateParam = params.get('saleDate');
+    document.getElementById('invoiceDate').textContent = saleDateParam
+      ? new Date(saleDateParam + 'T' + new Date().toTimeString().split(' ')[0]).toLocaleString('ar-EG', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleString('ar-EG', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const items = JSON.parse(decodeURIComponent(params.get('items') || '[]'));
+    document.getElementById('itemsBody').innerHTML = items.map((i, idx) => {
+      const itemTotal = (i.price * i.qty).toFixed(2);
+      const alt = idx % 2 === 1 ? ' class="item-row-alt"' : '';
+      const orig = i.original_price && Number(i.original_price) !== Number(i.price);
+      const priceCell = orig
+        ? `<span style="text-decoration:line-through;color:#999;font-size:10px;">${Number(i.original_price).toFixed(2)}</span> <span style="font-weight:bold;">${Number(i.price).toFixed(2)}</span>`
+        : `${Number(i.price).toFixed(2)}`;
+      return `<tr${alt}>
+        <td class="item-name">${i.name}</td>
+        <td class="item-qty">${i.qty}</td>
+        <td class="item-price">${priceCell}</td>
+        <td class="item-price">${itemTotal}</td>
+      </tr>`;
+    }).join('');
+
+    // JsBarcode
+    const barcodeData = (params.get('barcode') || '').toUpperCase();
+    if (barcodeData) {
+      const canvas = document.getElementById('barcodeCanvas');
+      if (canvas) {
+        JsBarcode(canvas, barcodeData, {
+          format: 'CODE128',
+          width: 1.5,
+          height: 30,
+          displayValue: true,
+          fontSize: 11,
+          font: 'monospace',
+          textMargin: 2,
+          margin: 0
+        });
+      }
+    }
+  </script>
+</body>
+</html>

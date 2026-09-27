@@ -1,0 +1,253 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الإعدادات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>⚙️ الإعدادات</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div class="card">
+          <h3 style="margin-bottom:16px;">بيانات المحل</h3>
+          <form id="shopForm">
+            <div class="form-group"><label>اسم المحل</label><input type="text" id="shopName"></div>
+            <div class="form-group"><label>رقم الهاتف</label><input type="text" id="shopPhone"></div>
+            <button type="submit" class="btn btn-primary">حفظ</button>
+          </form>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:16px;">الدرج (النقدية)</h3>
+          <form id="drawerForm">
+            <div class="form-group"><label>رصيد الدرج الافتتاحي</label>
+              <input type="number" id="drawerInitial" step="0.01" placeholder="0">
+              <small style="color:var(--text-secondary);font-size:11px;">المبلغ اللي في الدرج قبل أول عملية بيع</small>
+            </div>
+            <div class="form-group"><label>الرصيد الحالي</label>
+              <div id="currentDrawer" style="padding:10px 14px;border-radius:8px;background:var(--bg);font-weight:700;font-size:18px;color:var(--warning);">0</div>
+            </div>
+            <button type="submit" class="btn btn-primary">حفظ الرصيد الافتتاحي</button>
+          </form>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:16px;">الطباعة</h3>
+          <form id="printForm">
+            <div class="form-group"><label>نوع الطباعة</label>
+              <select id="printerSize">
+                <option value="80mm">80 مم (عريض)</option>
+                <option value="56mm">56 مم (ضيق)</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">حفظ</button>
+          </form>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:16px;">بوت التليجرام</h3>
+          <form id="telegramForm">
+            <div class="form-group"><label>توكن البوت</label><input type="text" id="telegramToken" placeholder="من BotFather"></div>
+            <div class="form-group"><label>حالة البوت</label>
+              <div id="botStatus" style="padding:8px 12px;border-radius:6px;font-weight:600;background:var(--bg);">غير معروف</div>
+            </div>
+            <button type="submit" class="btn btn-primary">حفظ</button>
+          </form>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:16px;">المظهر</h3>
+          <form id="themeForm">
+            <div class="form-group">
+              <label>الوضع</label>
+              <select id="themeMode">
+                <option value="light">فاتح</option>
+                <option value="dark">داكن (Dark Mode)</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">تطبيق</button>
+          </form>
+        </div>
+      </div>
+      <div class="card" style="margin-top:20px;">
+        <h3 style="margin-bottom:16px;">💰 العملات</h3>
+        <div class="form-row">
+          <div class="form-group"><label>رمز العملة</label><input type="text" id="curCode" placeholder="مثال: USD" style="width:80px;"></div>
+          <div class="form-group"><label>الاسم</label><input type="text" id="curName" placeholder="مثال: دولار أمريكي"></div>
+          <div class="form-group"><label>الرمز</label><input type="text" id="curSymbol" placeholder="مثال: $" style="width:80px;"></div>
+          <div class="form-group"><label>سعر الصرف</label><input type="number" id="curRate" step="0.01" placeholder="مقابل الجنيه"></div>
+          <div class="form-group" style="margin-top:22px;"><button class="btn btn-sm btn-primary" onclick="addCurrency()">➕ إضافة</button></div>
+        </div>
+        <div class="table-container" style="max-height:250px;">
+          <table>
+            <thead><tr><th>الرمز</th><th>الاسم</th><th>العلامة</th><th>سعر الصرف</th><th>افتراضي</th><th></th></tr></thead>
+            <tbody id="currenciesTable"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="saveMsg" style="display:none;position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:8px;color:white;font-weight:600;z-index:2000;background:var(--success);"></div>
+    </main>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    async function loadSettings() {
+      document.getElementById('shopName').value = (await window.api.db.getSetting('shop_name')) || '';
+      document.getElementById('shopPhone').value = (await window.api.db.getSetting('shop_phone')) || '';
+      document.getElementById('printerSize').value = (await window.api.db.getSetting('printer_size')) || '56mm';
+      document.getElementById('telegramToken').value = (await window.api.db.getSetting('telegram_token')) || '';
+      document.getElementById('drawerInitial').value = (await window.api.db.getSetting('drawer_initial')) || '0';
+      await updateCurrentDrawer();
+
+      const token = await window.api.db.getSetting('telegram_token');
+      const chatId = await window.api.db.getSetting('telegram_chat_id');
+      const status = document.getElementById('botStatus');
+      if (token && chatId) {
+        status.textContent = '✅ متصل (' + chatId + ')';
+        status.style.color = 'var(--success)';
+      } else if (token) {
+        status.textContent = '⏳ في انتظار إرسال /start للبوت';
+        status.style.color = 'var(--warning)';
+      } else {
+        status.textContent = '❌ غير مفعل';
+        status.style.color = 'var(--danger)';
+      }
+
+      const theme = localStorage.getItem('theme') || 'light';
+      document.getElementById('themeMode').value = theme;
+
+      loadCurrencies();
+    }
+
+    async function loadCurrencies() {
+      const currencies = await window.api.currency.getAll();
+      document.getElementById('currenciesTable').innerHTML = currencies.map(c => `
+        <tr>
+          <td><strong>${c.code}</strong></td>
+          <td>${c.name}</td>
+          <td>${c.symbol}</td>
+          <td>${c.exchange_rate}</td>
+          <td>${c.is_default ? '✅' : `<button class="btn btn-sm" onclick="setDefaultCurrency(${c.id})">تعيين</button>`}</td>
+          <td>${c.is_default ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteCurrency(${c.id})">✕</button>`}</td>
+        </tr>`).join('');
+    }
+
+    async function addCurrency() {
+      const code = document.getElementById('curCode').value.toUpperCase().trim();
+      const name = document.getElementById('curName').value.trim();
+      const symbol = document.getElementById('curSymbol').value.trim();
+      const rate = parseFloat(document.getElementById('curRate').value);
+      if (!code || !name || !symbol || !rate) { window.showAlert('املأ جميع الحقول', 'error'); return; }
+      const res = await window.api.currency.add(code, name, symbol, rate);
+      if (!res.success) { window.showAlert(res.message, 'error'); return; }
+      document.getElementById('curCode').value = '';
+      document.getElementById('curName').value = '';
+      document.getElementById('curSymbol').value = '';
+      document.getElementById('curRate').value = '';
+      loadCurrencies();
+      showMsg('✅ تم إضافة العملة');
+    }
+
+    async function setDefaultCurrency(id) {
+      await window.api.currency.setDefault(id);
+      loadCurrencies();
+      showMsg('✅ تم تغيير العملة الافتراضية');
+    }
+
+    async function deleteCurrency(id) {
+      if (!await window.showConfirm('هل أنت متأكد من حذف هذه العملة؟')) return;
+      const res = await window.api.currency.delete(id);
+      if (!res.success) { window.showAlert(res.message, 'error'); return; }
+      loadCurrencies();
+      showMsg('✅ تم حذف العملة');
+    }
+
+    function showMsg(text) {
+      const msg = document.getElementById('saveMsg');
+      msg.textContent = text;
+      msg.style.display = 'block';
+      setTimeout(() => msg.style.display = 'none', 2000);
+    }
+
+    document.getElementById('shopForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await window.api.db.setSetting('shop_name', document.getElementById('shopName').value);
+      await window.api.db.setSetting('shop_phone', document.getElementById('shopPhone').value);
+      document.getElementById('shopNameDisplay').textContent = document.getElementById('shopName').value;
+      showMsg('✅ تم حفظ بيانات المحل');
+    });
+
+    async function updateCurrentDrawer() {
+      const initial = parseFloat(document.getElementById('drawerInitial').value || '0');
+      const sales = await window.api.db.get("SELECT COALESCE(SUM(paid_amount),0) as total FROM sales");
+      const expenses = await window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM expenses");
+      const purchases = await window.api.db.get("SELECT COALESCE(SUM(paid_amount),0) as total FROM purchases");
+      const balance = initial + sales.total - expenses.total - purchases.total;
+      document.getElementById('currentDrawer').textContent = balance.toLocaleString() + ' ' + window.currencySymbol;
+    }
+
+    document.getElementById('drawerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const val = parseFloat(document.getElementById('drawerInitial').value) || 0;
+      await window.api.db.setSetting('drawer_initial', val);
+      // Insert initial_drawer into drawer_log if not already seeded
+      const existing = await window.api.db.get("SELECT COUNT(*) as c FROM drawer_log WHERE drawer_type='نقدي' AND reason='رصيد افتتاحي'");
+      if (!existing || existing.c === 0) {
+        await window.api.cash.addDrawerEntry('نقدي', val, 'رصيد افتتاحي');
+      } else {
+        // Reset drawer to new initial value: zero out, then add new initial
+        const cur = await window.api.cash.getBalance();
+        if (cur.drawer_cash > 0 || cur.drawer_cash < 0) {
+          await window.api.cash.addDrawerEntry('نقدي', -cur.drawer_cash, 'تصفية لإعادة الرصيد الافتتاحي');
+        }
+        await window.api.cash.addDrawerEntry('نقدي', val, 'رصيد افتتاحي جديد');
+      }
+      await updateCurrentDrawer();
+      showMsg('✅ تم حفظ رصيد الدرج الافتتاحي');
+    });
+
+    document.getElementById('printForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await window.api.db.setSetting('printer_size', document.getElementById('printerSize').value);
+      showMsg('✅ تم حفظ إعدادات الطباعة');
+    });
+
+    document.getElementById('telegramForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await window.api.db.setSetting('telegram_token', document.getElementById('telegramToken').value);
+      showMsg('✅ تم حفظ إعدادات التليجرام. أعد تشغيل البرنامج لتفعيل البوت.');
+    });
+
+    document.getElementById('themeForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const theme = document.getElementById('themeMode').value;
+      localStorage.setItem('theme', theme);
+      if (theme === 'dark') document.body.classList.add('dark-mode');
+      else document.body.classList.remove('dark-mode');
+      showMsg('✅ تم تغيير المظهر');
+    });
+
+    // Apply saved theme on load
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') document.body.classList.add('dark-mode');
+
+    loadSettings();
+
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

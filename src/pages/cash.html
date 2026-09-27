@@ -1,0 +1,189 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>الخزينة والدرج - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>الخزينة والدرج</h2>
+      </div>
+      <div class="cards">
+        <div class="card" style="border:2px solid var(--warning);">
+          <h3>💰 الدرج (نقدي)</h3>
+          <div class="value" style="color:var(--warning);font-size:32px;" id="drawerBalanceCash">0</div>
+        </div>
+        <div class="card" style="border:2px solid #2196F3;">
+          <h3>📱 الدرج (فودافون كاش)</h3>
+          <div class="value" style="color:#2196F3;font-size:32px;" id="drawerBalanceVodafone">0</div>
+        </div>
+        <div class="card" style="border:2px solid #4CAF50;">
+          <h3>💳 الدرج (انستاباي)</h3>
+          <div class="value" style="color:#4CAF50;font-size:32px;" id="drawerBalanceInstapay">0</div>
+        </div>
+        <div class="card"><h3>صافي الخزينة</h3><div class="value blue" id="safeBalance">0</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-success" id="btnCashDeposit" onclick="showCashModal('إيداع','الخزينة')">💰 إيداع في الخزينة</button>
+        <button class="btn btn-sm btn-danger" id="btnCashWithdraw" onclick="showCashModal('سحب','الخزينة')">💸 سحب من الخزينة</button>
+        <button class="btn btn-sm" id="btnDrawerDepositCash" style="background:var(--warning);color:white;" onclick="showCashModal('إيداع','الدرج','نقدي')">📥 إيداع في الدرج (نقدي)</button>
+        <button class="btn btn-sm" id="btnDrawerWithdrawCash" style="background:#e67300;color:white;" onclick="showCashModal('سحب','الدرج','نقدي')">📤 سحب من الدرج (نقدي)</button>
+        <button class="btn btn-sm" id="btnDrawerDepositVodafone" style="background:#2196F3;color:white;" onclick="showCashModal('إيداع','الدرج','فودافون كاش')">📥 إيداع في الدرج (فودافون)</button>
+        <button class="btn btn-sm" id="btnDrawerWithdrawVodafone" style="background:#0b7dda;color:white;" onclick="showCashModal('سحب','الدرج','فودافون كاش')">📤 سحب من الدرج (فودافون)</button>
+        <button class="btn btn-sm" id="btnDrawerDepositInstapay" style="background:#4CAF50;color:white;" onclick="showCashModal('إيداع','الدرج','انستاباي')">📥 إيداع في الدرج (انستاباي)</button>
+        <button class="btn btn-sm" id="btnDrawerWithdrawInstapay" style="background:#2d7d32;color:white;" onclick="showCashModal('سحب','الدرج','انستاباي')">📤 سحب من الدرج (انستاباي)</button>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>النوع</th><th>المبلغ</th><th>الرصيد</th><th>السبب</th><th>بواسطة</th><th>التاريخ</th><th>الإجراءات</th></tr></thead>
+          <tbody id="cashTable"></tbody>
+        </table>
+      </div>
+      <div id="cashPager" style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;padding:12px 0 4px"></div>
+    </main>
+  </div>
+  <div id="cashModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="cashModalTitle">عملية</h2>
+      <form id="cashForm">
+        <input type="hidden" id="cashId">
+        <input type="hidden" id="cashType">
+        <input type="hidden" id="cashTarget">
+        <input type="hidden" id="cashDrawerType">
+        <div class="form-group"><label>المبلغ *</label><input type="number" id="cashAmount" step="0.01" required></div>
+        <div class="form-group"><label>ملاحظات</label><input type="text" id="cashReason" placeholder="سبب العملية"></div>
+        <button type="submit" class="btn btn-primary">تأكيد</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('cashModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <script src="../js/pager.js"></script>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    const cashPager = window.TablePager.create({
+      container: 'cashPager', size: 20, label: 'حركة',
+      onGo: function () { loadCash(); }
+    });
+    function goToCashPage(n) { cashPager.go(n); }
+
+    async function loadCash() {
+      const bal = await window.api.cash.getBalance();
+      document.getElementById('safeBalance').textContent = bal.treasury.toLocaleString();
+      document.getElementById('drawerBalanceCash').textContent = bal.drawer_cash.toLocaleString();
+      document.getElementById('drawerBalanceVodafone').textContent = bal.drawer_vodafone.toLocaleString();
+      document.getElementById('drawerBalanceInstapay').textContent = bal.drawer_instapay.toLocaleString();
+
+      // SQL_BLOCKED_TABLES denies a JOIN on users, so the display name comes
+      // from the narrow nameMap handler instead of the query.
+      const names = Object.fromEntries((await window.api.users.nameMap()).map(u => [u.id, u.full_name]));
+
+      // The drawer and treasury logs are merged, sorted and paged in SQL. Doing
+      // it in JS meant fetching every row on both tables before drawing any.
+      // _src keeps the two id sequences apart (both start at 1) and is the
+      // tiebreaker so a page can't repeat or skip a row.
+      const UNION = `SELECT id, 0 AS _src, 'درج' AS source, drawer_type AS typeLabel, amount AS amt, balance AS bal, reason, user_id, created_at FROM drawer_log
+        UNION ALL
+        SELECT id, 1 AS _src, 'خزينة' AS source, '' AS typeLabel, amount, balance, reason, user_id, created_at FROM treasury_log`;
+      const cnt = await window.api.db.get("SELECT (SELECT COUNT(*) FROM drawer_log) + (SELECT COUNT(*) FROM treasury_log) AS c", []);
+      const total = (cnt && cnt.c) || 0;
+      cashPager.clamp(total);
+      const combined = await window.api.db.all(
+        `${UNION} ORDER BY created_at DESC, _src, id DESC LIMIT ? OFFSET ?`,
+        [cashPager.limit, cashPager.offset]);
+      cashPager.render(total);
+      combined.forEach(r => { r.full_name = names[r.user_id] || null; });
+
+      document.getElementById('cashTable').innerHTML = combined.map(r => {
+        const typeColor = r.amt >= 0 ? 'var(--success)' : 'var(--danger)';
+        const typeLabel = r.amt >= 0 ? 'إيداع' : 'سحب';
+        const sourceLabel = r.source === 'درج' ? `الدرج (${r.typeLabel})` : 'الخزينة';
+        return `<tr>
+          <td>${typeLabel} - ${sourceLabel}</td>
+          <td style="color:${typeColor};font-weight:700">${Math.abs(r.amt).toLocaleString()}</td>
+          <td>${Number(r.bal).toLocaleString()}</td>
+          <td>${r.reason || '-'}</td>
+          <td>${r.full_name || '-'}</td>
+          <td>${r.created_at}</td>
+          <td class="actions"><button class="btn btn-sm btn-danger" onclick="deleteCashEntry(${r.id},'${r.source}')">حذف</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function showCashModal(type, target, drawerType) {
+      const labels = { 'إيداع': '💰', 'سحب': '💸' };
+      let title;
+      if (target === 'الدرج') {
+        const dtLabels = { 'نقدي': 'نقدي', 'فودافون كاش': 'فودافون كاش', 'انستاباي': 'انستاباي' };
+        title = `${labels[type]} ${type === 'إيداع' ? 'إيداع في' : 'سحب من'} الدرج (${dtLabels[drawerType] || drawerType})`;
+      } else {
+        title = `${labels[type]} ${type === 'إيداع' ? 'إيداع في' : 'سحب من'} ${target}`;
+      }
+      document.getElementById('cashModalTitle').textContent = title;
+      document.getElementById('cashType').value = type;
+      document.getElementById('cashTarget').value = target;
+      document.getElementById('cashDrawerType').value = drawerType || '';
+      document.getElementById('cashForm').reset();
+      document.getElementById('cashId').value = '';
+      document.getElementById('cashModal').style.display = 'flex';
+      // Update prepend note for drawer
+      const reasonInput = document.getElementById('cashReason');
+      reasonInput.value = type === 'إيداع' ? 'إيداع' : 'سحب';
+    }
+
+    document.getElementById('cashForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const type = document.getElementById('cashType').value;
+      const target = document.getElementById('cashTarget').value;
+      const drawerType = document.getElementById('cashDrawerType').value;
+      const rawAmount = parseFloat(document.getElementById('cashAmount').value);
+      if (!rawAmount || rawAmount <= 0) { window.showAlert('أدخل مبلغ صحيح', 'error'); return; }
+      const amount = type === 'إيداع' ? rawAmount : -rawAmount;
+      const note = document.getElementById('cashReason').value || type;
+      if (target === 'الدرج') {
+        await window.api.cash.addDrawerEntry(drawerType, amount, note);
+      } else {
+        await window.api.cash.addTreasuryEntry(amount, note);
+      }
+      closeModal('cashModal');
+      loadCash();
+    });
+
+    async function deleteCashEntry(id, source) {
+      if (!await window.showConfirm('هل أنت متأكد من الحذف؟ الرصيد التراكمي سيتأثر')) return;
+      // main owns the delete and rebuilds the running balance chain
+      const r = await window.api.cash.deleteEntry(source === 'درج' ? 'drawer' : 'treasury', id);
+      if (!r.success) { window.showAlert(r.message, 'error'); return; }
+      loadCash();
+    }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadCash();
+  </script>
+  <script src="../js/sidebar.js"></script>
+  <script>
+    if (!window.can('cash','drawer') && !window.can('cash','treasury')) {
+      ['btnCashDeposit','btnCashWithdraw','btnDrawerDepositCash','btnDrawerWithdrawCash','btnDrawerDepositVodafone','btnDrawerWithdrawVodafone','btnDrawerDepositInstapay','btnDrawerWithdrawInstapay'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+    }
+  </script>
+</body>
+</html>

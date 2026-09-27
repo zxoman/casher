@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>التصنيفات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة التصنيفات</h2>
+        <button class="btn btn-sm btn-primary" id="addCategoryBtn" onclick="showCategoryModal()">➕ إضافة تصنيف</button>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadCategories()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>الاسم</th><th>الوصف</th><th>عدد المنتجات</th><th>تاريخ الإضافة</th><th>الإجراءات</th></tr></thead>
+          <tbody id="categoriesTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="categoryModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="modalTitle">إضافة تصنيف</h2>
+      <form id="categoryForm">
+        <input type="hidden" id="categoryId">
+        <div class="form-group"><label>الاسم *</label><input type="text" id="cName" required></div>
+        <div class="form-group"><label>الوصف</label><textarea id="cDescription" rows="2"></textarea></div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('categoryModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    async function loadCategories() {
+      const q = document.getElementById('searchInput').value;
+      let sql = "SELECT c.*, (SELECT COUNT(*) FROM products WHERE category_id = c.id) as product_count FROM categories c WHERE 1=1";
+      let params = [];
+      if (q) { sql += " AND c.name LIKE ?"; params.push(`%${q}%`); }
+      sql += " ORDER BY c.name";
+      const categories = await window.api.db.all(sql, params);
+      document.getElementById('categoriesTable').innerHTML = categories.map(c => `
+        <tr>
+          <td>${c.name}</td>
+          <td>${c.description || '-'}</td>
+          <td style="font-weight:700">${c.product_count}</td>
+          <td>${c.created_at || '-'}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-primary" onclick="editCategory(${c.id})">تعديل</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteCategory(${c.id})">حذف</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">لا توجد تصنيفات</td></tr>';
+    }
+
+    function showCategoryModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة تصنيف';
+      document.getElementById('categoryForm').reset();
+      document.getElementById('categoryId').value = '';
+      document.getElementById('categoryModal').style.display = 'flex';
+    }
+
+    async function editCategory(id) {
+      const c = await window.api.db.get("SELECT * FROM categories WHERE id=?", [id]);
+      if (!c) return;
+      document.getElementById('modalTitle').textContent = 'تعديل التصنيف';
+      document.getElementById('categoryId').value = c.id;
+      document.getElementById('cName').value = c.name;
+      document.getElementById('cDescription').value = c.description || '';
+      document.getElementById('categoryModal').style.display = 'flex';
+    }
+
+    document.getElementById('categoryForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('categoryId').value;
+      const name = document.getElementById('cName').value.trim();
+      const description = document.getElementById('cDescription').value.trim();
+      if (!name) { window.showAlert('الاسم مطلوب', 'error'); return; }
+      if (id) {
+        await window.api.db.run('UPDATE categories SET name=?, description=? WHERE id=?', [name, description, id]);
+        window.showAlert('تم تعديل التصنيف');
+      } else {
+        await window.api.db.run('INSERT INTO categories (name, description) VALUES (?,?)', [name, description]);
+        window.showAlert('تم إضافة التصنيف');
+      }
+      closeModal('categoryModal');
+      loadCategories();
+    });
+
+    async function deleteCategory(id) {
+      const count = await window.api.db.get("SELECT COUNT(*) as c FROM products WHERE category_id=?", [id]);
+      if (count.c > 0) {
+        return window.showAlert('لا يمكن حذف التصنيف لأنه مرتبط بـ ' + count.c + ' منتج', 'error');
+      }
+      if (!await window.showConfirm('هل أنت متأكد من حذف التصنيف؟')) return;
+      await window.api.db.run('DELETE FROM categories WHERE id=?', [id]);
+      window.showAlert('تم حذف التصنيف');
+      loadCategories();
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadCategories();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

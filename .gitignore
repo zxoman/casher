@@ -1,0 +1,19 @@
+node_modules/
+dist/
+out/
+*.log
+npm-debug.log*
+
+# local databases and backups never belong in the repo
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

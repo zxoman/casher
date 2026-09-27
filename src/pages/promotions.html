@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>العروض - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة العروض</h2>
+        <button class="btn btn-sm btn-primary" onclick="showPromoModal()">➕ إضافة عرض</button>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadPromotions()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>اسم العرض</th><th>النوع</th><th>التخفيض</th><th>عدد المنتجات</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+          <tbody id="promoTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div id="promoModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:600px;max-height:85vh;overflow-y:auto;">
+      <h2 id="modalTitle">إضافة عرض</h2>
+      <form id="promoForm">
+        <input type="hidden" id="promoId">
+        <div class="form-group"><label>اسم العرض *</label><input type="text" id="promoName" required placeholder="مثال: تخفيض صيفي"></div>
+        <div class="form-group">
+          <label>نوع العرض *</label>
+          <select id="promoType" onchange="onPromoTypeChange()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;">
+            <option value="individual">تخفيض فردي — تخفيض على منتجات محددة</option>
+            <option value="package">باكدج — مجموعة منتجات مع تخفيض</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <div class="form-group" style="flex:1"><label>نوع التخفيض *</label>
+            <select id="promoDiscountType" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;">
+              <option value="amount">مبلغ ثابت (ج.م)</option>
+              <option value="percent">نسبة مئوية (%)</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1"><label>قيمة التخفيض *</label><input type="number" id="promoDiscountValue" step="0.01" min="0" required placeholder="0"></div>
+        </div>
+        <div class="form-group" id="promoDescGroup" style="display:none;">
+          <label>ملاحظات</label>
+          <textarea id="promoDesc" rows="2" placeholder="optional"></textarea>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="promoActive" checked> العرض نشط
+          </label>
+        </div>
+
+        <div style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong id="productsLabel">المنتجات المختارة</strong>
+            <span id="selectedCount" style="color:var(--primary);font-weight:700;">0</span>
+          </div>
+          <input type="text" id="promoProductSearch" placeholder="ابحث بالاسم أو الباركود..." oninput="filterPromoProducts()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;">
+          <div id="promoSuggestions" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;display:none;"></div>
+          <div id="selectedProductsList" style="max-height:150px;overflow-y:auto;margin-top:8px;"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width:100%;margin-top:12px;">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;width:100%;" onclick="closeModal('promoModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let allProducts = [];
+    let selectedProducts = [];
+
+    async function loadPromotions() {
+      const q = document.getElementById('searchInput').value;
+      let sql = "SELECT p.*, (SELECT COUNT(*) FROM promotion_products WHERE promotion_id = p.id) as product_count FROM promotions p WHERE 1=1";
+      let params = [];
+      if (q) { sql += " AND p.name LIKE ?"; params.push(`%${q}%`); }
+      sql += " ORDER BY p.created_at DESC";
+      const promos = await window.api.db.all(sql, params);
+      document.getElementById('promoTable').innerHTML = promos.map(p => {
+        const typeLabel = p.type === 'individual' ? '🏷️ تخفيض فردي' : '📦 باكدج';
+        const discLabel = p.discount_type === 'percent' ? `${p.discount_value}%` : `${Number(p.discount_value).toLocaleString()} ${window.currencySymbol}`;
+        const statusLabel = p.is_active ? '<span style="color:var(--success);font-weight:700">نشط</span>' : '<span style="color:var(--text-muted)">معطل</span>';
+        return `<tr>
+          <td style="font-weight:700">${p.name}</td>
+          <td>${typeLabel}</td>
+          <td style="font-weight:700;color:var(--primary)">${discLabel}</td>
+          <td style="text-align:center">${p.product_count}</td>
+          <td>${statusLabel}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-primary" onclick="editPromo(${p.id})">تعديل</button>
+            <button class="btn btn-sm" style="background:${p.is_active ? 'var(--warning);color:#000' : 'var(--success);color:#fff'}" onclick="togglePromo(${p.id}, ${p.is_active})">${p.is_active ? 'تعطيل' : 'تفعيل'}</button>
+            <button class="btn btn-sm btn-danger" onclick="deletePromo(${p.id})">حذف</button>
+          </td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">لا توجد عروض</td></tr>';
+    }
+
+    function showPromoModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة عرض';
+      document.getElementById('promoForm').reset();
+      document.getElementById('promoId').value = '';
+      document.getElementById('promoActive').checked = true;
+      selectedProducts = [];
+      renderSelectedProducts();
+      document.getElementById('promoModal').style.display = 'flex';
+    }
+
+    async function editPromo(id) {
+      const p = await window.api.db.get("SELECT * FROM promotions WHERE id=?", [id]);
+      if (!p) return;
+      const prods = await window.api.db.all("SELECT product_id, quantity FROM promotion_products WHERE promotion_id=?", [id]);
+      document.getElementById('modalTitle').textContent = 'تعديل العرض';
+      document.getElementById('promoId').value = p.id;
+      document.getElementById('promoName').value = p.name;
+      document.getElementById('promoType').value = p.type;
+      document.getElementById('promoDiscountType').value = p.discount_type;
+      document.getElementById('promoDiscountValue').value = p.discount_value;
+      document.getElementById('promoActive').checked = !!p.is_active;
+      selectedProducts = prods.map(r => ({ id: r.product_id, qty: r.quantity || 1 }));
+      onPromoTypeChange();
+      renderSelectedProducts();
+      document.getElementById('promoModal').style.display = 'flex';
+    }
+
+    function onPromoTypeChange() {
+      const type = document.getElementById('promoType').value;
+      document.getElementById('productsLabel').textContent = type === 'package' ? 'منتجات الباكدج (اختر منتجين على الأقل)' : 'منتجات العرض';
+    }
+
+    document.getElementById('promoForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (selectedProducts.length === 0) { window.showAlert('اختر منتجاً واحداً على الأقل', 'error'); return; }
+      const type = document.getElementById('promoType').value;
+      if (type === 'package' && selectedProducts.length < 2) { window.showAlert('الباكدج يحتاج منتجين على الأقل', 'error'); return; }
+      const discountValue = parseFloat(document.getElementById('promoDiscountValue').value) || 0;
+      if (discountValue <= 0) { window.showAlert('أدخل قيمة تخفيض صحيحة', 'error'); return; }
+      if (document.getElementById('promoDiscountType').value === 'percent' && discountValue > 100) {
+        window.showAlert('النسبة لا يمكن أن تتجاوز 100%', 'error'); return;
+      }
+      const id = document.getElementById('promoId').value;
+      const name = document.getElementById('promoName').value.trim();
+      const discountType = document.getElementById('promoDiscountType').value;
+      const isActive = document.getElementById('promoActive').checked ? 1 : 0;
+
+      if (id) {
+        await window.api.db.run('UPDATE promotions SET name=?, type=?, discount_type=?, discount_value=?, is_active=? WHERE id=?', [name, type, discountType, discountValue, isActive, id]);
+        await window.api.db.run('DELETE FROM promotion_products WHERE promotion_id=?', [id]);
+      } else {
+        const result = await window.api.db.run('INSERT INTO promotions (name, type, discount_type, discount_value, is_active) VALUES (?,?,?,?,?)', [name, type, discountType, discountValue, isActive]);
+        var promoId = result.lastInsertRowid || result.id;
+      }
+      const targetId = id || promoId;
+      const stmt = "INSERT INTO promotion_products (promotion_id, product_id, quantity) VALUES (?, ?, ?)";
+      for (const sel of selectedProducts) {
+        const qty = (type === 'package' ? (parseInt(sel.qty) || 1) : 1);
+        await window.api.db.run(stmt, [targetId, sel.id, qty]);
+      }
+      closeModal('promoModal');
+      window.showAlert(id ? 'تم تعديل العرض' : 'تم إضافة العرض');
+      loadPromotions();
+    });
+
+    async function togglePromo(id, currentActive) {
+      await window.api.db.run("UPDATE promotions SET is_active=? WHERE id=?", [currentActive ? 0 : 1, id]);
+      loadPromotions();
+    }
+
+    async function deletePromo(id) {
+      if (!await window.showConfirm('هل أنت متأكد من حذف هذا العرض؟')) return;
+      await window.api.db.run("DELETE FROM promotions WHERE id=?", [id]);
+      window.showAlert('تم حذف العرض');
+      loadPromotions();
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    // Product picker
+    async function loadProducts() {
+      allProducts = await window.api.db.all("SELECT id, name, barcode, sell_price, stock FROM products WHERE stock > 0 ORDER BY name");
+    }
+
+    function filterPromoProducts() {
+      const q = document.getElementById('promoProductSearch').value.trim().toLowerCase();
+      const container = document.getElementById('promoSuggestions');
+      if (!q) { container.style.display = 'none'; return; }
+      const filtered = allProducts.filter(p => p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
+      if (!filtered.length) {
+        container.style.display = 'block';
+        container.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-secondary)">لا توجد نتائج</div>';
+        return;
+      }
+      container.style.display = 'block';
+      container.innerHTML = filtered.map(p => `<div onclick="addProductToPromo(${p.id})" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()} ${window.currencySymbol} — 📦 ${p.stock}</span></div>`).join('');
+    }
+
+    function addProductToPromo(productId) {
+      if (!selectedProducts.some(s => s.id === productId)) {
+        selectedProducts.push({ id: productId, qty: 1 });
+      }
+      document.getElementById('promoProductSearch').value = '';
+      document.getElementById('promoSuggestions').style.display = 'none';
+      renderSelectedProducts();
+    }
+
+    function removeProductFromPromo(productId) {
+      selectedProducts = selectedProducts.filter(s => s.id !== productId);
+      renderSelectedProducts();
+    }
+
+    function setPromoProductQty(productId, val) {
+      const sel = selectedProducts.find(s => s.id === productId);
+      if (sel) sel.qty = parseInt(val) || 1;
+    }
+
+    function renderSelectedProducts() {
+      const list = document.getElementById('selectedProductsList');
+      const isPackage = document.getElementById('promoType').value === 'package';
+      document.getElementById('selectedCount').textContent = selectedProducts.length;
+      if (!selectedProducts.length) { list.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:8px;font-size:13px;">لم يتم اختيار منتجات بعد</div>'; return; }
+      list.innerHTML = selectedProducts.map(s => {
+        const p = allProducts.find(x => x.id === s.id);
+        if (!p) return '';
+        const qtyInput = isPackage
+          ? `<input type="number" value="${s.qty}" min="1" onchange="setPromoProductQty(${s.id}, this.value)" style="width:50px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-size:12px;">`
+          : '<span style="color:var(--text-muted);font-size:11px">×1</span>';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-hover, #f5f5f5);border-radius:4px;margin-bottom:4px;font-size:13px;"><span>${p.name}</span><span style="display:flex;align-items:center;gap:8px;">${qtyInput}<span style="color:var(--text-secondary)">${Number(p.sell_price).toLocaleString()}</span><button type="button" onclick="removeProductFromPromo(${s.id})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;">✕</button></span></div>`;
+      }).join('');
+    }
+
+    loadProducts();
+    loadPromotions();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

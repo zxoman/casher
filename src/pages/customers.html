@@ -1,0 +1,380 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>العملاء - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة العملاء</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm" id="archiveToggleBtn" onclick="toggleArchived()" style="background:var(--border);">🗄 الأرشيف</button>
+          <button class="btn btn-sm btn-primary" id="addCustomerBtn" onclick="showCustomerModal()" style="${window.can('customers','a')?'':'display:none'}">➕ إضافة عميل</button>
+        </div>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadCustomers()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>المديونية</th><th>تاريخ التسجيل</th><th>الإجراءات</th></tr></thead>
+          <tbody id="customersTable"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div id="customerModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="modalTitle">إضافة عميل</h2>
+      <form id="customerForm">
+        <input type="hidden" id="customerId">
+        <div class="form-row">
+          <div class="form-group"><label>الاسم *</label><input type="text" id="cName" required></div>
+          <div class="form-group"><label>الهاتف</label><input type="text" id="cPhone"></div>
+        </div>
+        <div class="form-group"><label>البريد الإلكتروني</label><input type="email" id="cEmail"></div>
+        <div class="form-group"><label>العنوان</label><input type="text" id="cAddress"></div>
+        <div class="form-group"><label>ملاحظات</label><textarea id="cNotes" rows="2"></textarea></div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('customerModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <div id="debtModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2>إضافة دين مباشر</h2>
+      <form id="debtForm">
+        <input type="hidden" id="debtCustomerId">
+        <div class="form-group"><label>المبلغ *</label><input type="number" id="debtAmount" step="0.01" required></div>
+        <div class="form-group"><label>السبب</label><input type="text" id="debtDescription" placeholder="سبب الدين"></div>
+        <button type="submit" class="btn btn-primary">إضافة الدين</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('debtModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <div id="paymentModal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:600px;">
+      <h2 id="paymentModalTitle">تسديد ديون</h2>
+      <p id="paymentCustomerName" style="color:var(--text-muted);margin-bottom:12px;"></p>
+      <input type="hidden" id="paymentCustomerId">
+      <div id="paymentInvoices"></div>
+      <div style="display:flex;justify-content:space-between;padding:12px 0;font-weight:700;border-top:1px solid var(--border);margin-top:8px;">
+        <span>المتبقي الكلي:</span>
+        <span id="paymentTotalRemaining">0</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;">
+        <span>المدفوع الآن:</span>
+        <span id="paymentTotalPaid">0</span>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px;">
+        <div style="font-weight:700;margin-bottom:6px;">💳 طريقة الدفع</div>
+        <div style="display:flex;gap:6px;">
+          <div style="flex:1;"><label style="display:block;font-size:11px;color:var(--warning);font-weight:700;">💰 نقدي</label><input type="number" class="payment-method-input" data-method="cash" min="0" step="0.01" value="0" oninput="onPaymentMethodInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+          <div style="flex:1;"><label style="display:block;font-size:11px;color:#2196F3;font-weight:700;">📱 فودافون</label><input type="number" class="payment-method-input" data-method="vodafone" min="0" step="0.01" value="0" oninput="onPaymentMethodInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+          <div style="flex:1;"><label style="display:block;font-size:11px;color:#4CAF50;font-weight:700;">💳 انستاباي</label><input type="number" class="payment-method-input" data-method="instapay" min="0" step="0.01" value="0" oninput="onPaymentMethodInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+        </div>
+      </div>
+      <button class="btn" onclick="fillAllPayment()" style="width:100%;margin-bottom:8px;background:var(--warning);color:#000;">تسديد الكل 🔄</button>
+      <button class="btn btn-primary" onclick="submitPayment()" style="width:100%;">تأكيد التسديد</button>
+      <button type="button" class="btn" style="background:var(--border);margin-top:8px;width:100%;" onclick="closeModal('paymentModal')">إلغاء</button>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let showArchived = false;
+    function toggleArchived() {
+      showArchived = !showArchived;
+      const btn = document.getElementById('archiveToggleBtn');
+      if (showArchived) { btn.style.background = 'var(--warning)'; btn.style.color = '#000'; btn.textContent = '🔙 العودة للعملاء'; }
+      else { btn.style.background = 'var(--border)'; btn.style.color = ''; btn.textContent = '🗄 الأرشيف'; }
+      loadCustomers();
+    }
+
+    async function loadCustomers() {
+      const q = document.getElementById('searchInput').value;
+      let sql = "SELECT * FROM customers WHERE 1=1";
+      let params = [];
+      if (showArchived) { sql += " AND COALESCE(archived,0)=1"; }
+      else { sql += " AND COALESCE(archived,0)=0"; }
+      if (q) { sql += " AND (name LIKE ? OR phone LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+      sql += " ORDER BY name";
+      const customers = await window.api.db.all(sql, params);
+      const rows = await Promise.all(customers.map(async (c) => {
+        const saleDebt = await window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as total FROM sales WHERE customer_id=? AND remaining_amount>0", [c.id]);
+        const directDebt = await window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM customer_debt_entries WHERE customer_id=?", [c.id]);
+        const totalDebt = saleDebt.total + directDebt.total;
+        return `<tr>
+          <td>${c.name}</td>
+          <td>${c.phone || '-'}</td>
+          <td>${c.address || '-'}</td>
+          <td style="color:${totalDebt>0?'var(--danger)':'var(--success)'};font-weight:700">${Number(totalDebt).toLocaleString()}</td>
+          <td>${c.created_at}</td>
+          <td class="actions">
+            ${showArchived
+              ? `<button class="btn btn-sm btn-success" onclick="restoreCustomer(${c.id})">استعادة</button>
+                 <button class="btn btn-sm btn-info" onclick="showCustomerStatement(${c.id})">📋 كشف</button>`
+              : `${window.can('customers','e')?`<button class="btn btn-sm btn-primary" onclick="editCustomer(${c.id})">تعديل</button>`:''}
+            <button class="btn btn-sm" style="background:var(--danger);color:white;" onclick="showDebtModal(${c.id},'${c.name}')">+ دين</button>
+            ${totalDebt>0?`<button class="btn btn-sm btn-success" onclick="showPaymentModal(${c.id},'${c.name}')" ${window.can('customers','settle')?'':'style="display:none"'}>تسديد</button>`:''}
+            <button class="btn btn-sm btn-info" onclick="showCustomerStatement(${c.id})">📋 كشف</button>
+            ${window.can('customers','d')?`<button class="btn btn-sm btn-danger" onclick="deleteCustomer(${c.id})">أرشفة</button>`:''}`}
+          </td></tr>`;
+      }));
+      document.getElementById('customersTable').innerHTML = rows.join('');
+    }
+
+    function showCustomerModal() {
+      document.getElementById('modalTitle').textContent = 'إضافة عميل';
+      document.getElementById('customerForm').reset();
+      document.getElementById('customerId').value = '';
+      document.getElementById('customerModal').style.display = 'flex';
+    }
+
+    async function editCustomer(id) {
+      const c = await window.api.db.get("SELECT * FROM customers WHERE id = ?", [id]);
+      document.getElementById('modalTitle').textContent = 'تعديل عميل';
+      document.getElementById('customerId').value = c.id;
+      document.getElementById('cName').value = c.name;
+      document.getElementById('cPhone').value = c.phone || '';
+      document.getElementById('cEmail').value = c.email || '';
+      document.getElementById('cAddress').value = c.address || '';
+      document.getElementById('cNotes').value = c.notes || '';
+      document.getElementById('customerModal').style.display = 'flex';
+    }
+
+    document.getElementById('customerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('customerId').value;
+      const data = [
+        document.getElementById('cName').value,
+        document.getElementById('cPhone').value,
+        document.getElementById('cEmail').value,
+        document.getElementById('cAddress').value,
+        document.getElementById('cNotes').value
+      ];
+      if (id) {
+        await window.api.db.run('UPDATE customers SET name=?, phone=?, email=?, address=?, notes=? WHERE id=?', [...data, id]);
+      } else {
+        await window.api.db.run('INSERT INTO customers (name, phone, email, address, notes) VALUES (?,?,?,?,?)', data);
+        await window.api.telegram.sendNotification('customer', { name: data[0], phone: data[1] });
+      }
+      closeModal('customerModal');
+      loadCustomers();
+    });
+
+    async function deleteCustomer(id) {
+      if (!await window.showConfirm('هل تريد أرشفة هذا العميل؟ سيظل محفوظاً في التقارير والكشوف السابقة')) return;
+      await window.api.db.run('UPDATE customers SET archived=1 WHERE id=?', [id]);
+      loadCustomers();
+    }
+
+    async function restoreCustomer(id) {
+      await window.api.db.run('UPDATE customers SET archived=0 WHERE id=?', [id]);
+      loadCustomers();
+    }
+
+    function showDebtModal(customerId, customerName) {
+      document.getElementById('debtCustomerId').value = customerId;
+      document.getElementById('debtForm').reset();
+      document.getElementById('debtModal').style.display = 'flex';
+    }
+
+    document.getElementById('debtForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const customerId = document.getElementById('debtCustomerId').value;
+      const amount = parseFloat(document.getElementById('debtAmount').value);
+      const description = document.getElementById('debtDescription').value || 'دين مباشر';
+      const dr = await window.api.ops.addDebtEntry(customerId, amount, description);
+      if (!dr.success) { window.showAlert(dr.message, 'error'); return; }
+      closeModal('debtModal');
+      loadCustomers();
+      window.showAlert(`تم إضافة دين بقيمة ${amount.toLocaleString()}`);
+    });
+
+    async function showPaymentModal(customerId, customerName) {
+      document.getElementById('paymentModalTitle').textContent = 'تسديد ديون';
+      document.getElementById('paymentCustomerName').textContent = `العميل: ${customerName}`;
+      document.getElementById('paymentCustomerId').value = customerId;
+      const invoices = await window.api.db.all("SELECT id, invoice_number, total_amount, paid_amount, remaining_amount FROM sales WHERE customer_id=? AND remaining_amount>0 ORDER BY created_at ASC", [customerId]);
+      const directDebt = await window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM customer_debt_entries WHERE customer_id=?", [customerId]);
+      let html = '<table><thead><tr><th>رقم الفاتورة</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>المدفوع الآن</th></tr></thead><tbody>';
+      let totalRemaining = 0;
+      invoices.forEach((inv, i) => {
+        totalRemaining += inv.remaining_amount;
+        html += `<tr>
+          <td>${inv.invoice_number}</td>
+          <td>${Number(inv.total_amount).toLocaleString()}</td>
+          <td>${Number(inv.paid_amount).toLocaleString()}</td>
+          <td style="color:var(--danger);font-weight:700">${Number(inv.remaining_amount).toLocaleString()}</td>
+          <td><input type="number" class="payment-input" data-type="sale" data-id="${inv.id}" data-remaining="${inv.remaining_amount}" min="0" max="${inv.remaining_amount}" step="0.01" value="0" style="width:100px;" oninput="updatePaymentTotal()"></td>
+        </tr>`;
+      });
+      if (directDebt.total > 0) {
+        totalRemaining += directDebt.total;
+        html += `<tr style="background:var(--bg-hover, #f5f5f5);">
+          <td><strong>دين مباشر</strong></td>
+          <td>-</td>
+          <td>-</td>
+          <td style="color:var(--danger);font-weight:700">${Number(directDebt.total).toLocaleString()}</td>
+          <td><input type="number" class="payment-input" data-type="direct" data-remaining="${directDebt.total}" min="0" max="${directDebt.total}" step="0.01" value="0" style="width:100px;" oninput="updatePaymentTotal()"></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      document.getElementById('paymentInvoices').innerHTML = html;
+      document.getElementById('paymentTotalRemaining').textContent = totalRemaining.toLocaleString();
+      document.getElementById('paymentTotalPaid').textContent = '0';
+      document.getElementById('paymentModal').style.display = 'flex';
+    }
+
+    function fillAllPayment() {
+      document.querySelectorAll('.payment-input').forEach(inp => {
+        inp.value = inp.dataset.remaining || inp.max || 0;
+      });
+      updatePaymentTotal();
+    }
+
+    function updatePaymentTotal() {
+      const inputs = document.querySelectorAll('.payment-input');
+      let total = 0;
+      inputs.forEach(inp => total += parseFloat(inp.value) || 0);
+      document.getElementById('paymentTotalPaid').textContent = total.toLocaleString();
+    }
+
+    function onPaymentMethodInput() {
+      const totalPaid = parseFloat(document.getElementById('paymentTotalPaid').textContent.replace(/[^0-9.-]/g, '')) || 0;
+      const methodInputs = document.querySelectorAll('.payment-method-input');
+      let methodTotal = 0;
+      methodInputs.forEach(inp => methodTotal += parseFloat(inp.value) || 0);
+      if (methodTotal > totalPaid) {
+        const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+        const overage = methodTotal - totalPaid;
+        const cashVal = parseFloat(cashInput.value) || 0;
+        if (cashVal >= overage) {
+          cashInput.value = (cashVal - overage).toFixed(2);
+        }
+      }
+    }
+
+        async function submitPayment() {
+      const customerId = document.getElementById('paymentCustomerId').value;
+      const inputs = document.querySelectorAll('.payment-input');
+      const payments = [];
+      let totalPaid = 0;
+      for (const inp of inputs) {
+        const amount = parseFloat(inp.value) || 0;
+        if (amount <= 0) continue;
+        if (inp.dataset.type === 'direct') {
+          payments.push({ kind: 'direct', id: parseInt(customerId, 10), amount });
+          totalPaid += amount;
+        } else {
+          const remaining = parseFloat(inp.dataset.remaining) || 0;
+          const payAmount = Math.min(amount, remaining);
+          if (payAmount <= 0) continue;
+          payments.push({ kind: 'sale', id: parseInt(inp.dataset.id), amount: payAmount });
+          totalPaid += payAmount;
+        }
+      }
+      if (totalPaid === 0) { window.showAlert('أدخل المبلغ المدفوع أولاً', 'error'); return; }
+
+      const breakdown = {};
+      for (const inp of document.querySelectorAll('.payment-method-input')) {
+        breakdown[inp.dataset.method] = parseFloat(inp.value) || 0;
+      }
+      if (!Object.values(breakdown).some(v => v > 0)) breakdown.cash = totalPaid;
+
+      // Runs in main under the customers.settle permission, in one transaction,
+      // and records the drawer split itself.
+      const res = await window.api.ops.settleDebt('customer', payments, breakdown);
+      if (!res.success) { window.showAlert(res.message, 'error'); return; }
+      closeModal('paymentModal');
+      loadCustomers();
+      window.showAlert(`تم تسجيل تسديد بقيمة ${res.total.toLocaleString()}`);
+    }
+    async function showCustomerStatement(id) {
+      const c = await window.api.db.get("SELECT * FROM customers WHERE id=?", [id]);
+      const sales = await window.api.db.all("SELECT * FROM sales WHERE customer_id=? ORDER BY created_at DESC", [id]);
+      const debts = await window.api.db.all("SELECT * FROM customer_debt_entries WHERE customer_id=? ORDER BY created_at DESC", [id]);
+      // Fetch items for all sales
+      const saleIds = sales.map(s => s.id);
+      const items = saleIds.length > 0 ? await window.api.db.all(`SELECT si.*, p.name as product_name FROM sale_items si JOIN products p ON si.product_id = p.id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')})`, saleIds) : [];
+      const itemsBySale = {};
+      items.forEach(i => { if (!itemsBySale[i.sale_id]) itemsBySale[i.sale_id] = []; itemsBySale[i.sale_id].push(i); });
+      const saleDebt = sales.reduce((s, x) => s + x.remaining_amount, 0);
+      const directDebt = debts.reduce((s, x) => s + x.amount, 0);
+      const balance = saleDebt + directDebt;
+      const shopName = localStorage.getItem('shopName') || 'نظام الكاشير';
+      const win = window.open('', '_blank', 'width=800,height=600');
+      win.document.write(`<html dir="rtl"><head><meta charset="UTF-8"><title>كشف حساب - ${c.name}</title>
+      <style>
+        body{font-family:sans-serif;margin:20px;color:#333;}
+        h1{text-align:center;font-size:20px;margin-bottom:4px;}
+        .shop{text-align:center;font-size:13px;color:#666;margin-bottom:20px;}
+        .info{display:flex;justify-content:space-between;padding:10px 0;border-bottom:2px solid #333;margin-bottom:16px;font-size:14px;}
+        .info div{flex:1;}
+        .info .label{color:#666;}
+        .balance{text-align:center;font-size:22px;font-weight:700;padding:12px;margin:16px 0;border-radius:8px;}
+        .debt{color:var(--danger,#e74c3c);background:#fef0f0;}
+        .clear{color:var(--success,#27ae60);background:#f0faf0;}
+        table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+        th{background:#1a73e8;color:#fff;padding:8px;text-align:center;}
+        td{padding:6px 8px;text-align:center;border-bottom:1px solid #ddd;}
+        .pos{color:var(--danger,#e74c3c);font-weight:700;}
+        .neg{color:var(--success,#27ae60);font-weight:700;}
+        .section-title{font-size:16px;font-weight:700;margin-top:20px;padding:6px 0;border-bottom:1px solid #ccc;}
+        .print-btn{display:block;width:200px;margin:20px auto;padding:10px;background:#1a73e8;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;}
+        @media print{.print-btn{display:none;}}
+        .footer{text-align:center;font-size:11px;color:#999;margin-top:30px;border-top:1px solid #eee;padding-top:10px;}
+      </style></head><body>
+      <h1>${shopName}</h1>
+      <div class="shop">كشف حساب العميل</div>
+      <div class="info">
+        <div><span class="label">الاسم:</span> ${c.name}</div>
+        <div><span class="label">الهاتف:</span> ${c.phone || '-'}</div>
+        <div><span class="label">العنوان:</span> ${c.address || '-'}</div>
+      </div>
+      <div class="balance ${balance > 0 ? 'debt' : 'clear'}">
+        ${balance > 0 ? `المديونية الحالية: ${balance.toLocaleString()} ${window.currencySymbol}` : 'لا توجد مديونية'}
+      </div>
+      <div style="display:flex;justify-content:space-around;font-size:14px;margin-bottom:12px;">
+        <div><span class="label">إجمالي المشتريات:</span> ${sales.reduce((s,x)=>s+x.total_amount,0).toLocaleString()} ${window.currencySymbol}</div>
+        <div><span class="label">إجمالي المدفوع:</span> ${sales.reduce((s,x)=>s+x.paid_amount,0).toLocaleString()} ${window.currencySymbol}</div>
+        <div><span class="label">إجمالي الديون المسددة:</span> ${debts.filter(d=>d.amount<0).reduce((s,x)=>s+Math.abs(x.amount),0).toLocaleString()} ${window.currencySymbol}</div>
+      </div>
+      <div class="section-title">📄 فواتير المشتريات</div>
+      ${sales.length === 0 ? '<p style="text-align:center;color:#999;">لا توجد فواتير</p>' : `<table><thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>المنتجات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th></tr></thead><tbody>
+      ${sales.map(s => `<tr><td style="font-weight:700;">${s.invoice_number}</td><td>${s.created_at}</td><td style="text-align:right;font-size:12px;">${(itemsBySale[s.id] || []).map(i => `${i.product_name || '#'+i.product_id} x${i.quantity} = ${Number(i.total).toLocaleString()}`).join('<br>')}</td><td>${Number(s.total_amount).toLocaleString()}</td><td>${Number(s.paid_amount).toLocaleString()}</td><td class="pos">${Number(s.remaining_amount).toLocaleString()}</td></tr>`).join('')}
+      </tbody></table>`}
+      <div class="section-title">💰 الديون المسجلة</div>
+      ${debts.length === 0 ? '<p style="text-align:center;color:#999;">لا توجد ديون مسجلة</p>' : `<table><thead><tr><th>التاريخ</th><th>البيان</th><th>المبلغ</th></tr></thead><tbody>
+      ${debts.map(d => `<tr><td>${d.created_at}</td><td>${d.description || '-'}</td><td class="${d.amount > 0 ? 'pos' : 'neg'}">${d.amount > 0 ? Number(d.amount).toLocaleString() : '(' + Math.abs(d.amount).toLocaleString() + ')'}</td></tr>`).join('')}
+      </tbody></table>`}
+      <button class="print-btn" onclick="window.print()">🖨️ طباعة / تصدير PDF</button>
+      <div class="footer">تم الإنشاء في: ${new Date().toLocaleString('ar-EG')}</div>
+      </body></html>`);
+      win.document.close();
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadCustomers();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

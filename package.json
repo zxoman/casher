@@ -1,0 +1,71 @@
+{
+  "name": "casher_app",
+  "version": "1.0.0",
+  "description": "نظام ERP لإدارة متجر",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64",
+    "build:linux": "electron-builder --linux --x64"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.0.0",
+    "chart.js": "^4.4.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "node-telegram-bot-api": "^1.1.2",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.6",
+    "@noble/hashes": "^1.4.0",
+    "electron": "28.3.3",
+    "electron-builder": "^26.15.3",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "com.casherapp.erp",
+    "productName": "نظام الكاشير",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*",
+      "database/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/images/icon.ico",
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "electronUpdaterCompatibility": ">=2.16",
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "artifactName": "CasherApp-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "نظام الكاشير"
+    }
+  }
+}

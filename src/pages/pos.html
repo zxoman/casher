@@ -1,0 +1,988 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>نقطة البيع - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content" style="padding: 12px;">
+      <div class="pos-container">
+        <div class="pos-products">
+          <div class="search-bar">
+            <input type="text" id="productSearch" placeholder="بحث عن منتج بالاسم أو الباركود..." oninput="searchProducts()" onkeydown="if(event.key==='Enter')event.preventDefault(),quickAddSearch()">
+            <input type="number" id="priceOverride" placeholder="السعر" step="0.01" style="width:90px;">
+            <button class="btn btn-sm btn-primary" onclick="showAddToCartModal()">➕</button>
+          </div>
+          <div class="product-grid" id="productGrid"></div>
+        </div>
+        <div class="pos-cart">
+          <h3>فاتورة البيع</h3>
+          <div id="shiftBar" style="margin-bottom:8px;"></div>
+          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:var(--warning);color:#fff;border-radius:6px;font-size:14px;font-weight:700;">💰 رصيد الدرج (نقدي): <span id="posDrawerBalanceCash">...</span></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#2196F3;color:#fff;border-radius:6px;font-size:14px;font-weight:700;">📱 رصيد الدرج (فودافون كاش): <span id="posDrawerBalanceVodafone">...</span></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#4CAF50;color:#fff;border-radius:6px;font-size:14px;font-weight:700;">💳 رصيد الدرج (انستاباي): <span id="posDrawerBalanceInstapay">...</span></div>
+            <button class="btn btn-sm" style="background:#fff;color:var(--danger);font-weight:700;border:1px solid var(--danger);" onclick="clearDrawer()">🧹 تصفية كل الأدراج</button>
+          </div>
+          <div class="form-group" style="position:relative;">
+            <input type="text" id="customerInput" placeholder="👤 عميل نقدي (ابحث بالاسم أو الهاتف)" autocomplete="off" oninput="onCustomerInput()" onblur="setTimeout(()=>hideCustomerSuggestions(),200)" style="width:100%;padding:8px 10px;font-size:15px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;">
+            <div id="customerSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:2px solid #ccc;border-radius:8px;max-height:220px;overflow-y:auto;z-index:100;box-shadow:0 6px 16px rgba(0,0,0,0.2);"></div>
+          </div>
+          <div class="form-group" style="margin-bottom:4px;">
+            <label style="font-size:12px;">📅 تاريخ الفاتورة</label>
+            <input type="date" id="invoiceDate" class="form-control" onchange="onInvoiceDateChange()" style="width:100%;padding:4px 8px;font-size:13px;">
+          </div>
+          <div class="cart-items" id="cartItems"></div>
+          <div class="cart-total" id="cartTotal">الإجمالي: 0</div>
+          <div class="form-group" id="manualDiscountRow" style="display:flex;align-items:center;gap:6px;">
+            <label style="white-space:nowrap;">الخصم</label>
+            <input type="number" id="discountAmount" value="0" min="0" step="0.01" oninput="calcRemaining()" style="width:80px;">
+            <select id="discountType" onchange="calcRemaining()" style="width:65px;padding:4px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+              <option value="amount">مبلغ</option>
+              <option value="percent">%</option>
+            </select>
+            <span id="discountDisplay" style="font-size:12px;color:var(--text-muted);"></span>
+          </div>
+          <div id="packageDiscountRow" style="display:none;padding:6px 8px;background:#e8f5e9;color:#2e7d32;border-radius:4px;margin-bottom:6px;font-size:13px;font-weight:700;">🎁 باكدج: <span id="packageDiscountText"></span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;font-weight:700;border-top:1px solid var(--border);margin-bottom:8px;">
+            <span>بعد الخصم:</span>
+            <span id="totalAfterDiscount">0</span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px;">
+            <div style="font-weight:700;margin-bottom:6px;">💳 طريقة الدفع</div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1;"><label style="display:block;font-size:11px;color:var(--warning);font-weight:700;">💰 نقدي</label><input type="number" class="payment-method-input" data-method="cash" min="0" step="0.01" value="0" oninput="onPaymentInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+              <div style="flex:1;"><label style="display:block;font-size:11px;color:#2196F3;font-weight:700;">📱 فودافون</label><input type="number" class="payment-method-input" data-method="vodafone" min="0" step="0.01" value="0" oninput="onPaymentInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+              <div style="flex:1;"><label style="display:block;font-size:11px;color:#4CAF50;font-weight:700;">💳 انستاباي</label><input type="number" class="payment-method-input" data-method="instapay" min="0" step="0.01" value="0" oninput="onPaymentInput()" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:14px;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0 2px;font-weight:700;border-top:1px solid var(--border);margin-top:6px;">
+              <span>المدفوع:</span>
+              <span id="totalPaidDisplay" style="color:var(--success);">0</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:2px 0 0;font-weight:700;">
+              <span>المتبقي:</span>
+              <span id="remainingAmount" style="color:var(--danger);">0</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-success" onclick="completeSale()" style="flex:1;">إتمام البيع</button>
+            <button class="btn btn-warning" onclick="suspendInvoice()" style="flex:1;" id="suspendBtn">⏸️ تعليق</button>
+          </div>
+          <div style="margin-top:6px;">
+            <button class="btn btn-sm" onclick="showSuspendedModal()" id="suspendedBtn" style="width:100%;display:none;background:#6c5ce7;color:#fff;font-weight:700;">📋 فواتير معلقة (<span id="suspendedCount">0</span>)</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Suspended Invoices Modal -->
+  <div id="suspendedModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:999;justify-content:center;align-items:center;" onclick="if(event.target===this)closeSuspendedModal()">
+    <div style="background:#fff;border-radius:12px;padding:20px;width:90%;max-width:600px;max-height:80vh;overflow-y:auto;box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+      <h3 style="margin:0 0 12px;">📋 الفواتير المعلقة</h3>
+      <div id="suspendedList" style="display:flex;flex-direction:column;gap:8px;"></div>
+      <button class="btn btn-sm" onclick="closeSuspendedModal()" style="margin-top:12px;width:100%;">إغلاق</button>
+    </div>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let cart = [];
+    let products = [];
+    let customers = [];
+    let individualPromos = {};
+    let packagePromos = [];
+    let cartPackageDiscount = 0;
+    let containerLinks = {}; // containerId -> { unitId, unitsPerContainer }
+
+    async function loadDrawerBalance() {
+      const bal = await window.api.cash.getBalance();
+      document.getElementById('posDrawerBalanceCash').textContent = bal.drawer_cash.toLocaleString();
+      document.getElementById('posDrawerBalanceVodafone').textContent = bal.drawer_vodafone.toLocaleString();
+      document.getElementById('posDrawerBalanceInstapay').textContent = bal.drawer_instapay.toLocaleString();
+    }
+
+    async function clearDrawer() {
+      const bal = await window.api.cash.getBalance();
+      const totalDrawer = bal.drawer_cash + bal.drawer_vodafone + bal.drawer_instapay;
+      if (totalDrawer <= 0) { window.showAlert('رصيد الأدراج فارغ، لا يمكن التصفية', 'error'); return; }
+
+      if (!await window.showConfirm(`تأكيد تصفية كل الأدراج؟ سينقل ${totalDrawer.toLocaleString()} ${window.currencySymbol} إلى الخزينة`)) return;
+
+      const entries = [
+        { type: 'نقدي', amt: bal.drawer_cash },
+        { type: 'فودافون كاش', amt: bal.drawer_vodafone },
+        { type: 'انستاباي', amt: bal.drawer_instapay }
+      ];
+      let totalCleared = 0;
+      for (const e of entries) {
+        if (e.amt > 0) {
+          await window.api.cash.addDrawerEntry(e.type, -e.amt, 'تصفية الدرج');
+          totalCleared += e.amt;
+        }
+      }
+      if (totalCleared > 0) {
+        await window.api.cash.addTreasuryEntry(totalCleared, 'إيداع خزينة من تصفية الأدراج');
+      }
+
+      const msg = entries.filter(e => e.amt > 0).map(e => `${e.type}: ${e.amt.toLocaleString()}`);
+      await window.api.telegram.sendNotification('expense', { description: `تصفية الأدراج: ${msg.join('، ')}` });
+
+      window.showAlert(`تم تصفية الأدراج بنجاح. تم نقل ${totalDrawer.toLocaleString()} ${window.currencySymbol} إلى الخزينة`);
+      loadDrawerBalance();
+    }
+
+    async function loadData() {
+      loadDrawerBalance();
+      products = await window.api.db.all("SELECT * FROM products ORDER BY name");
+      customers = await window.api.db.all("SELECT * FROM customers WHERE COALESCE(archived,0)=0 ORDER BY name");
+      await loadCompositions();
+      await loadPromotions();
+
+      window.posCustomers = customers;
+
+      const today = new Date().toISOString().split('T')[0];
+      const dateInput = document.getElementById('invoiceDate');
+      dateInput.value = today;
+      dateInput.max = today;
+
+      renderProducts();
+      restoreCartState();
+    }
+
+    async function loadCompositions() {
+      containerLinks = {};
+      const links = await window.api.db.all("SELECT * FROM product_compositions");
+      for (const l of links) containerLinks[l.container_id] = { unitId: l.unit_id, unitsPerContainer: l.units_per_container };
+      for (const p of products) {
+        const link = containerLinks[p.id];
+        if (link) {
+          const unitProd = products.find(x => x.id === link.unitId);
+          if (unitProd) p.stock = Math.floor(unitProd.stock / link.unitsPerContainer);
+        }
+      }
+    }
+
+    async function syncPosContainerStocks() {
+      for (const cid of Object.keys(containerLinks)) {
+        const link = containerLinks[cid];
+        const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [link.unitId]);
+        const derived = Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer);
+        await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, cid]);
+      }
+    }
+
+    async function loadPromotions() {
+      individualPromos = {};
+      packagePromos = [];
+      const promos = await window.api.db.all("SELECT * FROM promotions WHERE is_active=1");
+      for (const prom of promos) {
+        const prods = await window.api.db.all("SELECT product_id, quantity FROM promotion_products WHERE promotion_id=?", [prom.id]);
+        const productIds = [];
+        for (const r of prods) {
+          const qty = (prom.type === 'package' ? (parseInt(r.quantity) || 1) : 1);
+          for (let k = 0; k < qty; k++) productIds.push(r.product_id);
+        }
+        if (prom.type === 'individual') {
+          for (const pid of productIds) {
+            if (!individualPromos[pid]) individualPromos[pid] = [];
+            individualPromos[pid].push(prom);
+          }
+        } else {
+          packagePromos.push({ ...prom, productIds });
+        }
+      }
+    }
+
+    function onCustomerInput() {
+      const q = document.getElementById('customerInput').value.trim();
+      const container = document.getElementById('customerSuggestions');
+      if (!q) { container.style.display = 'none'; return; }
+      const matched = (window.posCustomers || []).filter(c =>
+        c.name.toLowerCase().includes(q.toLowerCase()) ||
+        (c.phone && c.phone.includes(q))
+      ).slice(0, 10);
+      if (matched.length === 0) { container.style.display = 'none'; return; }
+      container.innerHTML = matched.map(c =>
+        `<div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #ddd;font-size:15px;" onmousedown="selectCustomer(${c.id},'${c.name.replace(/'/g, "\\'")}','${(c.phone||'').replace(/'/g, "\\'")}')" onmouseover="this.style.background='#f0f0f0'" onmouseout="this.style.background=''"><span style="font-weight:700;color:#000;">${c.name}</span> ${c.phone ? '<span style="color:#666;margin-right:8px;">📞 '+c.phone+'</span>' : ''}</div>`
+      ).join('');
+      container.style.display = 'block';
+    }
+
+    function hideCustomerSuggestions() {
+      document.getElementById('customerSuggestions').style.display = 'none';
+    }
+
+    function selectCustomer(id, name, phone) {
+      document.getElementById('customerInput').value = `${name} ${phone ? '('+phone+')' : ''}`;
+      document.getElementById('customerInput').dataset.customerId = id;
+      document.getElementById('customerSuggestions').style.display = 'none';
+    }
+
+    function searchProducts() {
+      renderProducts();
+    }
+
+    function quickAddSearch() {
+      const q = document.getElementById('productSearch').value.trim().toLowerCase();
+      if (!q) return;
+      const byCode = products.filter(p => p.barcode && p.barcode.toLowerCase() === q);
+      const byId = /^p\d+$/i.test(q) ? products.filter(p => p.id === parseInt(q.slice(1))) : [];
+      const matches = byCode.length > 0 ? byCode : byId;
+      if (matches.length === 1) {
+        document.getElementById('productSearch').value = '';
+        addToCart(matches[0].id);
+        searchProducts();
+      } else if (matches.length > 1) {
+        showProductPicker(matches);
+      }
+    }
+
+    function showProductPicker(matches) {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.style.display = 'flex';
+      overlay.style.zIndex = '1000';
+      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+      let html = '<div class="modal" style="max-width:400px;text-align:center;"><h3 style="margin-bottom:12px;">اختر المنتج</h3>';
+      matches.forEach((p, i) => {
+        html += `<div data-picker-id="${p.id}" style="padding:10px 14px;margin:4px 0;background:var(--bg);border-radius:8px;cursor:pointer;font-weight:600;border:1px solid var(--border);" onmouseover="this.style.background='var(--primary)';this.style.color='#fff'" onmouseout="this.style.background='var(--bg)';this.style.color='inherit'">${p.name} — ${Number(p.sell_price).toLocaleString()} ${window.currencySymbol} <span style="font-weight:400;font-size:11px;">📦 ${p.stock||0}</span></div>`;
+      });
+      html += '<button class="btn" style="background:var(--border);margin-top:12px;width:100%;" onclick="this.closest(\'.modal-overlay\').remove()">إلغاء</button></div>';
+      overlay.innerHTML = html;
+      overlay.querySelectorAll('[data-picker-id]').forEach(el => {
+        el.addEventListener('click', () => {
+          overlay.remove();
+          addToCart(parseInt(el.dataset.pickerId));
+          document.getElementById('productSearch').value = '';
+          searchProducts();
+        });
+      });
+      document.body.appendChild(overlay);
+    }
+
+    function renderProducts() {
+      const q = document.getElementById('productSearch').value.toLowerCase();
+      const grid = document.getElementById('productGrid');
+      let html = products
+        .filter(p => {
+          if (!q) return true;
+          if (p.name.toLowerCase().includes(q)) return true;
+          if (p.barcode && p.barcode.includes(q)) return true;
+          if (/^p\d+$/i.test(q) && p.id === parseInt(q.slice(1), 10)) return true;
+          return false;
+        })
+        .filter(p => p.stock > 0)
+        .map(p => {
+          const promo = individualPromos[p.id] ? individualPromos[p.id][0] : null;
+          const badge = promo ? (promo.discount_type === 'percent' ? `${promo.discount_value}%-` : `${Number(promo.discount_value).toLocaleString()}${window.currencySymbol}-`) : '';
+          return `<div class="product-item" onclick="addToCart(${p.id})">
+            <div class="name">${p.name}</div>
+            <div class="price">${Number(p.sell_price).toLocaleString()} ${window.currencySymbol}</div>
+            ${promo ? `<div class="price" style="color:var(--danger);font-size:11px;">عرض ${badge}</div>` : ''}
+            <div class="stock">المخزون: ${p.stock}</div>
+          </div>`;
+        }).join('');
+      // Package promotions appear as separate purchasable tiles
+      for (const prom of packagePromos) {
+        if (q && !prom.name.toLowerCase().includes(q)) continue;
+        const items = prom.productIds.map(id => products.find(x => x.id === id));
+        if (items.some(it => !it || it.stock <= 0)) continue;
+        const subtotal = items.reduce((s, it) => s + it.sell_price, 0);
+        const credit = packageUnitCredit(prom);
+        const bundlePrice = Math.max(0, subtotal - credit);
+        const members = displayPackageMembers(prom);
+        html += `<div class="product-item" onclick="addPackageToCart(${prom.id})" style="border:2px solid var(--warning);background:linear-gradient(180deg, #fff8e1, #fffef5);">
+          <div class="name" style="color:var(--warning);">🎁 ${prom.name}</div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.4;margin:2px 0;">${members}</div>
+          <div class="price" style="color:var(--danger);font-weight:700;">${Number(bundlePrice).toLocaleString()} ${window.currencySymbol}</div>
+          ${credit > 0 ? `<div class="price" style="color:var(--success);font-size:11px;">خصم ${prom.discount_type === 'percent' ? prom.discount_value + '%' : Number(credit).toLocaleString() + ' ' + window.currencySymbol}</div>` : ''}
+        </div>`;
+      }
+      grid.innerHTML = html;
+    }
+
+    function unitConsumption(unitId) {
+      let c = 0;
+      for (const it of cart) {
+        const l = containerLinks[it.id];
+        if (l && l.unitId === unitId) c += it.qty * l.unitsPerContainer;
+        else if (it.id === unitId) c += it.qty;
+      }
+      return c;
+    }
+
+    function addSingleProductToCart(p, { override = null } = {}) {
+      const basePrice = override != null && override > 0 ? override : p.sell_price;
+      const existing = cart.find(x => x.key === `${p.id}`);
+      const link = containerLinks[p.id];
+      if (link) {
+        const unit = products.find(x => x.id === link.unitId);
+        if (!unit || unit.stock <= 0) return false;
+        if (unitConsumption(link.unitId) + link.unitsPerContainer > unit.stock) {
+          window.showAlert('لا يمكن إضافة العلبة — مخزون ' + unit.name + ' غير كافٍ', 'error');
+          return false;
+        }
+      } else {
+        const isUnitOf = Object.values(containerLinks).some(l => l.unitId === p.id);
+        if (isUnitOf) {
+          if (unitConsumption(p.id) >= p.stock) {
+            window.showAlert('لا يمكن إضافة المزيد — مخزون ' + p.name + ' غير كافٍ', 'error');
+            return false;
+          }
+        } else if (existing && existing.qty >= p.stock) {
+          return false;
+        }
+      }
+      if (existing) {
+        existing.qty++;
+      } else {
+        cart.push({ key: `${p.id}`, id: p.id, name: p.name, barcode: p.barcode, price: basePrice, qty: 1, stock: p.stock, original_price: p.sell_price, buy_price: p.buy_price, manual_price: override != null && override > 0 });
+      }
+      return true;
+    }
+
+    function addPackageToCart(promoId) {
+      const prom = packagePromos.find(x => x.id === promoId);
+      if (!prom) return;
+      const items = prom.productIds.map(id => products.find(x => x.id === id));
+      if (items.some(it => !it)) return;
+      const inCart = {};
+      cart.forEach(it => { inCart[it.id] = (inCart[it.id] || 0) + it.qty; });
+      const needed = {};
+      for (const it of items) needed[it.id] = (needed[it.id] || 0) + 1;
+      for (const pid of Object.keys(needed)) {
+        const it = products.find(x => x.id == pid);
+        if (!it || it.stock <= 0 || (inCart[pid] || 0) + needed[pid] > it.stock) {
+          window.showAlert('لا يمكن إضافة الباكدج — مخزون غير كاف لـ ' + (it ? it.name : 'أحد المنتجات'), 'error');
+          return;
+        }
+      }
+      for (const it of items) addSingleProductToCart(it);
+      recomputeLinePrices();
+      renderCart();
+    }
+
+    function findIndividualEffectivePrice(p, basePrice) {
+      const promos = individualPromos[p.id] || [];
+      if (!promos.length) return basePrice;
+      // Apply the deepest discount promotion for this product
+      let best = null;
+      for (const prom of promos) {
+        let disc = prom.discount_type === 'percent' ? basePrice * (prom.discount_value / 100) : prom.discount_value;
+        disc = Math.min(disc, basePrice);
+        if (!best || disc > (best.discount_type === 'percent' ? basePrice * (best.discount_value / 100) : best.discount_value)) best = prom;
+      }
+      let discountAmount = best.discount_type === 'percent' ? basePrice * (best.discount_value / 100) : best.discount_value;
+      discountAmount = Math.min(discountAmount, basePrice);
+      return Math.round((basePrice - discountAmount) * 100) / 100;
+    }
+
+    function addToCart(productId) {
+      const p = products.find(x => x.id === productId);
+      if (!p || p.stock <= 0) return;
+      const priceOverride = parseFloat(document.getElementById('priceOverride').value);
+      if (!addSingleProductToCart(p, { override: priceOverride })) return;
+      recomputeLinePrices();
+      renderCart();
+    }
+
+    function saveCartState() {
+      const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+      const vodafoneInput = document.querySelector('.payment-method-input[data-method="vodafone"]');
+      const instapayInput = document.querySelector('.payment-method-input[data-method="instapay"]');
+      const customerInput = document.getElementById('customerInput');
+      const state = {
+        cart,
+        discountAmount: document.getElementById('discountAmount').value,
+        discountType: document.getElementById('discountType').value,
+        invoiceDate: document.getElementById('invoiceDate').value,
+        customerValue: customerInput.value,
+        customerId: customerInput.dataset.customerId || null,
+        paymentCash: cashInput ? cashInput.value : '0',
+        paymentVodafone: vodafoneInput ? vodafoneInput.value : '0',
+        paymentInstapay: instapayInput ? instapayInput.value : '0'
+      };
+      localStorage.setItem('posCartState', JSON.stringify(state));
+    }
+
+    function restoreCartState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('posCartState'));
+        if (!saved || !saved.cart || saved.cart.length === 0) return;
+        cart = saved.cart;
+        document.getElementById('discountAmount').value = saved.discountAmount || 0;
+        if (saved.discountType) document.getElementById('discountType').value = saved.discountType;
+        if (saved.invoiceDate) document.getElementById('invoiceDate').value = saved.invoiceDate;
+        const custInput = document.getElementById('customerInput');
+        custInput.value = saved.customerValue || '';
+        if (saved.customerId) custInput.dataset.customerId = saved.customerId;
+        const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+        const vodafoneInput = document.querySelector('.payment-method-input[data-method="vodafone"]');
+        const instapayInput = document.querySelector('.payment-method-input[data-method="instapay"]');
+        if (cashInput) cashInput.value = saved.paymentCash || '0';
+        if (vodafoneInput) vodafoneInput.value = saved.paymentVodafone || '0';
+        if (instapayInput) instapayInput.value = saved.paymentInstapay || '0';
+        recomputeLinePrices();
+        renderCart();
+      } catch (e) { /* ignore corrupt state */ }
+    }
+
+    function renderCart() {
+      const div = document.getElementById('cartItems');
+      const pkg = bestActivePackage();
+      let html = '';
+        if (pkg.promo) {
+        html += `<div style="padding:8px 10px;background:#e8f5e9;color:#2e7d32;border-radius:6px;margin-bottom:8px;font-size:13px;font-weight:700;">🎁 باكدج «${pkg.promo.name}» مفعّل (${pkg.packs}×)</div>`;
+      }
+      html += cart.map((item, i) => `<div class="cart-item">
+        <span>${item.name}</span>
+        <div class="qty-controls">
+          <button onclick="changeQty(${i}, -1)">-</button>
+          <input type="number" value="${item.qty}" min="1" style="width:45px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:4px;font-size:13px;" onchange="updateCartQty(${i}, this.value)">
+          <button onclick="changeQty(${i}, 1)">+</button>
+          <input type="number" value="${item.price}" step="0.01" style="width:70px;text-align:center;font-size:12px;" onchange="updatePrice(${i}, this.value)">
+          <span>${(item.price * item.qty).toLocaleString()} ${window.currencySymbol}</span>
+          ${item.original_price && item.original_price !== item.price ? `<span style="font-size:10px;color:var(--warning);">(<del>${item.original_price}</del>)</span>` : ''}
+          <button onclick="removeFromCart(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;">✕</button>
+        </div>
+      </div>`).join('');
+      div.innerHTML = html;
+      updateCartTotals();
+    }
+
+    function updateCartQty(i, val) {
+      const item = cart[i];
+      const p = products.find(x => x.id === item.id);
+      let qty = parseInt(val) || 1;
+      if (qty < 1) qty = 1;
+      if (p && qty > p.stock) qty = p.stock;
+      item.qty = qty;
+      recomputeLinePrices();
+      renderCart();
+    }
+
+    function updatePrice(i, val) {
+      const item = cart[i];
+      const p = products.find(x => x.id === item.id);
+      const newPrice = parseFloat(val) || 0;
+      if (p && p.min_sell_price > 0 && newPrice < p.min_sell_price) {
+        window.showAlert(`لا يمكن بيع المنتج بأقل من ${Number(p.min_sell_price).toLocaleString()} ${window.currencySymbol}`);
+        renderCart();
+        return;
+      }
+      item.price = newPrice;
+      item.manual_price = true;
+      updateCartTotals();
+    }
+
+    function updateCartTotals() {
+      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const count = cart.reduce((sum, x) => sum + x.qty, 0);
+      document.getElementById('cartTotal').textContent = `🛒 ${count} قطعة | ${total.toLocaleString()} ${window.currencySymbol}`;
+      const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+      const otherInputs = document.querySelectorAll('.payment-method-input:not([data-method="cash"])');
+      const otherTotal = [...otherInputs].reduce((s, inp) => s + (parseFloat(inp.value) || 0), 0);
+      if (total > 0 && otherTotal === 0) {
+        cashInput.value = total;
+      }
+      calcRemaining();
+      saveCartState();
+    }
+
+    function changeQty(i, delta) {
+      const item = cart[i];
+      const p = products.find(x => x.id === item.id);
+      item.qty += delta;
+      if (item.qty <= 0) cart.splice(i, 1);
+      else if (item.qty > (p ? p.stock : item.qty)) item.qty = p ? p.stock : item.qty;
+      recomputeLinePrices();
+      renderCart();
+    }
+
+    function removeFromCart(i) { cart.splice(i, 1); recomputeLinePrices(); renderCart(); }
+
+    // Compute how many whole packages of a given promo are in the cart.
+    function countPackages(prom) {
+      if (!prom.productIds.length) return 0;
+      const inCart = {};
+      cart.forEach(it => { inCart[it.id] = (inCart[it.id] || 0) + it.qty; });
+      let packs = Infinity;
+      for (const pid of prom.productIds) {
+        const have = inCart[pid] || 0;
+        if (have <= 0) return 0;
+        const exact = prom.productIds.filter(x => x === pid).length;
+        packs = Math.min(packs, Math.floor(have / exact));
+      }
+      return packs > 0 ? packs : 0;
+    }
+
+    // Unit package discount on the package subtotal (uses product sell prices).
+    function packageUnitCredit(prom) {
+      const subtotal = prom.productIds.reduce((s, pid) => {
+        const p = products.find(x => x.id === pid);
+        return s + (p ? p.sell_price : 0);
+      }, 0);
+      if (prom.discount_type === 'percent') {
+        return Math.min(subtotal * (prom.discount_value / 100), subtotal);
+      }
+      return Math.min(prom.discount_value, subtotal);
+    }
+
+    // Display package members grouped with their required quantities: "A ×2 + B".
+    function displayPackageMembers(prom) {
+      const counts = {};
+      for (const pid of prom.productIds) counts[pid] = (counts[pid] || 0) + 1;
+      return Object.entries(counts).map(([pid, n]) => {
+        const p = products.find(x => x.id == pid);
+        const name = p ? p.name : '?';
+        return n > 1 ? `${name} ×${n}` : name;
+      }).join(' + ');
+    }
+
+    // Best active package in the cart (largest total credit).
+    function bestActivePackage() {
+      if (!packagePromos.length) return { promo: null, packs: 0, credit: 0, appliedIds: [] };
+      let best = null;
+      for (const prom of packagePromos) {
+        const packs = countPackages(prom);
+        if (packs <= 0) continue;
+        const credit = packageUnitCredit(prom) * packs;
+        if (!best || credit > best.credit) best = { promo: prom, packs, credit: Math.round(credit * 100) / 100, appliedIds: prom.productIds };
+      }
+      return best || { promo: null, packs: 0, credit: 0, appliedIds: [] };
+    }
+
+    // Recompute each cart line price: base = original price (or manual override),
+    // then apply deepest individual promo, then spread the package credit over the
+    // package's lines.
+    function recomputeLinePrices() {
+      cartPackageDiscount = 0;
+      if (!cart.length) return;
+      cart.forEach(it => {
+        if (it.manual_price) return;
+        const ref = it.original_price || it.price;
+        let price = findIndividualEffectivePrice(products.find(x => x.id === it.id), ref);
+        it.price = Math.round(price * 100) / 100;
+      });
+      const { credit } = bestActivePackage();
+      cartPackageDiscount = credit;
+    }
+
+    function onPaymentInput() { calcRemaining(); }
+
+    function onInvoiceDateChange() {
+      const dateInput = document.getElementById('invoiceDate');
+      const today = new Date().toISOString().split('T')[0];
+      const isPast = dateInput.value < today;
+      dateInput.style.borderColor = isPast ? '#e67e22' : '';
+      dateInput.style.borderWidth = isPast ? '2px' : '';
+    }
+
+    function getDiscount() {
+      const val = parseFloat(document.getElementById('discountAmount').value) || 0;
+      const type = document.getElementById('discountType').value;
+      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      if (type === 'percent') {
+        const amount = total * (val / 100);
+        return { amount, percent: val };
+      }
+      const pct = total > 0 ? (val / total * 100) : 0;
+      return { amount: val, percent: pct };
+    }
+
+    function calcRemaining() {
+      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const count = cart.reduce((sum, x) => sum + x.qty, 0);
+      document.getElementById('cartTotal').textContent = `🛒 ${count} قطعة | ${total.toLocaleString()} ${window.currencySymbol}`;
+      const { amount: manualDiscount, percent: manualPct } = getDiscount();
+      const totalDiscount = manualDiscount + cartPackageDiscount;
+      const afterDiscount = Math.max(0, total - totalDiscount);
+      const type = document.getElementById('discountType').value;
+      if (manualDiscount > 0) {
+        document.getElementById('discountDisplay').textContent = type === 'percent' ? `${manualPct.toFixed(1)}% (${manualDiscount.toFixed(2)})` : `${manualPct.toFixed(1)}%`;
+      } else {
+        document.getElementById('discountDisplay').textContent = '';
+      }
+      const pkgRow = document.getElementById('packageDiscountRow');
+      if (cartPackageDiscount > 0) {
+        pkgRow.style.display = 'block';
+        document.getElementById('packageDiscountText').textContent = `-${Number(cartPackageDiscount).toLocaleString()} ${window.currencySymbol}`;
+      } else {
+        pkgRow.style.display = 'none';
+        document.getElementById('packageDiscountText').textContent = '';
+      }
+      document.getElementById('totalAfterDiscount').textContent = afterDiscount.toLocaleString();
+      const inputs = document.querySelectorAll('.payment-method-input');
+      let totalPaid = 0;
+      inputs.forEach(inp => totalPaid += parseFloat(inp.value) || 0);
+      if (totalPaid > afterDiscount) {
+        inputs.forEach(inp => {
+          const val = parseFloat(inp.value) || 0;
+          if (val > 0) {
+            const ratio = val / totalPaid;
+            inp.value = Math.round((val - (totalPaid - afterDiscount) * ratio) * 100) / 100;
+          }
+        });
+        totalPaid = afterDiscount;
+      }
+      document.getElementById('totalPaidDisplay').textContent = totalPaid.toLocaleString();
+      document.getElementById('remainingAmount').textContent = (afterDiscount - totalPaid).toLocaleString();
+    }
+
+    async function completeSale(noPrint) {
+      if (cart.length === 0) { window.showAlert('السلة فارغة', 'error'); return; }
+      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const { amount: manualDiscount, percent: discountPct } = getDiscount();
+      const totalDiscount = manualDiscount + cartPackageDiscount;
+      const afterDiscount = Math.max(0, total - totalDiscount);
+
+      const inputs = document.querySelectorAll('.payment-method-input');
+      let totalPaid = 0;
+      const breakdown = {};
+      inputs.forEach(inp => {
+        const amt = parseFloat(inp.value) || 0;
+        if (amt > 0) { breakdown[inp.dataset.method] = amt; totalPaid += amt; }
+      });
+      if (totalPaid > afterDiscount) totalPaid = afterDiscount;
+      const remaining = Math.max(0, afterDiscount - totalPaid);
+
+      const methodEntries = Object.entries(breakdown);
+      const method = methodEntries.length > 0 ? methodEntries.reduce((a, b) => a[1] > b[1] ? a : b)[0] : 'cash';
+
+      const customerInput = document.getElementById('customerInput');
+      const customerId = customerInput.dataset.customerId || null;
+
+      const customerName = customerId ? (window.posCustomers || []).find(c => c.id == customerId)?.name : null;
+
+      const result = await window.api.db.get('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM sales');
+      const nextId = result?.nextId || 1;
+      const seq = String(nextId).padStart(5, '0');
+      const invoiceNum = 'INV-' + seq;
+      const barcode = String(nextId);
+
+      const paidForDb = Math.min(totalPaid, afterDiscount);
+      const saleDate = document.getElementById('invoiceDate').value || new Date().toISOString().split('T')[0];
+      const saleResult = await window.api.db.run(
+        'INSERT INTO sales (invoice_number, customer_id, user_id, total_amount, discount, paid_amount, remaining_amount, payment_method, payment_breakdown, sale_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [invoiceNum, customerId, user.id, total, totalDiscount, paidForDb, remaining, method, JSON.stringify(breakdown), saleDate]
+      );
+
+      for (const item of cart) {
+        await window.api.db.run(
+          'INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [saleResult.lastInsertRowid, item.id, item.qty, item.price, item.qty * item.price, item.buy_price || 0, item.original_price || item.price]
+        );
+        const link = containerLinks[item.id];
+        if (link) {
+          await window.api.db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [item.qty * link.unitsPerContainer, link.unitId]);
+        } else {
+          await window.api.db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [item.qty, item.id]);
+        }
+      }
+      await syncPosContainerStocks();
+
+      const dtMap = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+      for (const [k, v] of Object.entries(breakdown)) {
+        if (v > 0) {
+          await window.api.cash.addDrawerEntry(dtMap[k] || k, v, `فاتورة ${invoiceNum}`);
+        }
+      }
+
+      const details = cart.map(x => `${x.name} x${x.qty}`).join(', ');
+      const methodLabels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+      const methodStr = methodEntries.length > 1
+        ? methodEntries.map(([k, v]) => `${methodLabels[k] || k} ${v.toLocaleString()}`).join(' + ')
+        : (methodLabels[method] || method);
+      await window.api.telegram.sendNotification('sale', { invoice: invoiceNum, total: afterDiscount, paid: paidForDb, remaining, method: methodStr, details, customer: customerName });
+
+      document.getElementById('cartTotal').textContent = `✅ تم البيع - ${invoiceNum}`;
+
+      if (!noPrint) {
+        window.api.print.invoice({ invoice: invoiceNum, items: cart, total: afterDiscount, paid: paidForDb, method: methodStr, discount: totalDiscount, discountPct, payment_breakdown: JSON.stringify(breakdown), customer: customerName, barcode, cashier: user.full_name, saleDate });
+      }
+
+      cart = [];
+      cartPackageDiscount = 0;
+      document.getElementById('discountAmount').value = 0;
+      document.getElementById('discountType').value = 'amount';
+      document.getElementById('discountDisplay').textContent = '';
+      document.querySelectorAll('.payment-method-input').forEach(inp => inp.value = 0);
+      document.getElementById('invoiceDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('invoiceDate').style.borderColor = '';
+      document.getElementById('customerInput').value = '';
+      delete document.getElementById('customerInput').dataset.customerId;
+      localStorage.removeItem('posCartState');
+      renderCart();
+      loadData();
+      loadDrawerBalance();
+      loadSuspendedInvoices();
+    }
+
+    let activeShiftId = null;
+    let shiftTimerInterval = null;
+
+    function localNowStr() {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+    }
+
+    function parseShiftTime(str) {
+      return new Date(str.replace(' ', 'T'));
+    }
+
+    async function checkActiveShift() {
+      const row = await window.api.db.get("SELECT * FROM shifts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1", [user.id]);
+      const bar = document.getElementById('shiftBar');
+      if (shiftTimerInterval) { clearInterval(shiftTimerInterval); shiftTimerInterval = null; }
+      if (row) {
+        activeShiftId = row.id;
+        function renderShiftBar() {
+          const start = parseShiftTime(row.start_time);
+          const now = new Date();
+          const mins = Math.floor((now - start) / 60000);
+          const hrs = Math.floor(mins / 60);
+          const rem = mins % 60;
+          bar.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:linear-gradient(135deg,#27ae60,#2ecc71);color:#fff;border-radius:6px;font-size:13px;font-weight:700;">
+            <span>🟢 شيفت مفتوح — ${row.user_name}</span>
+            <span>${hrs}س ${rem}د</span>
+            ${window.can('shifts','close') ? `<button class="btn btn-sm" onclick="closeShift()" style="background:#e74c3c;color:#fff;border:none;font-weight:700;">🔴 إنهاء الشيفت</button>` : ''}
+          </div>`;
+        }
+        renderShiftBar();
+        shiftTimerInterval = setInterval(renderShiftBar, 60000);
+      } else {
+        activeShiftId = null;
+        bar.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:linear-gradient(135deg,#95a5a6,#7f8c8d);color:#fff;border-radius:6px;font-size:13px;font-weight:700;">
+          <span>⚫ لا يوجد شيفت مفتوح</span>
+          ${window.can('shifts','open') ? `<button class="btn btn-sm" onclick="openShift()" style="background:#27ae60;color:#fff;border:none;font-weight:700;">🟢 فتح شيفت</button>` : ''}
+        </div>`;
+      }
+    }
+
+    async function openShift() {
+      const existing = await window.api.db.get("SELECT id FROM shifts WHERE user_id = ? AND status = 'open'", [user.id]);
+      if (existing) { window.showAlert('لديك شيفت مفتوح بالفعل', 'error'); return; }
+      if (!await window.showConfirm('فتح شيفت جديد باسم ' + user.full_name + '؟')) return;
+      const r = await window.api.ops.openShift(localNowStr());
+      if (!r.success) { window.showAlert(r.message, 'error'); return; }
+      window.showAlert('✅ تم فتح الشيفت بنجاح');
+      checkActiveShift();
+    }
+
+    async function closeShift() {
+      if (!activeShiftId) return;
+      if (!await window.showConfirm('إنهاء الشيفت الحالي؟')) return;
+      const shift = await window.api.db.get("SELECT * FROM shifts WHERE id = ?", [activeShiftId]);
+      if (!shift) { window.showAlert('الشيفت غير موجود', 'error'); return; }
+      const now = new Date();
+      const start = parseShiftTime(shift.start_time);
+      const duration = Math.floor((now - start) / 60000);
+      const endTime = localNowStr();
+
+      const shiftStart = shift.start_time;
+      const stats = await window.api.db.get(
+        "SELECT COUNT(*) as cnt, COALESCE(SUM(total_amount),0) as total, COALESCE(SUM(paid_amount),0) as paid, COALESCE(SUM(remaining_amount),0) as remaining FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, shiftStart]
+      );
+
+      const exp = await window.api.db.get(
+        "SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, shiftStart]
+      );
+
+      const cost = await window.api.db.get(
+        "SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE s.user_id = ? AND datetime(s.created_at, 'localtime') >= ?",
+        [user.id, shiftStart]
+      );
+
+      const debt = await window.api.db.get(
+        "SELECT COALESCE(SUM(remaining_amount),0) as total FROM sales WHERE user_id = ? AND datetime(created_at, 'localtime') >= ? AND remaining_amount > 0",
+        [user.id, shiftStart]
+      );
+
+      const paidDebt = await window.api.db.get(
+        "SELECT COALESCE(SUM(amount),0) as total FROM customer_debt_entries WHERE user_id = ? AND datetime(created_at, 'localtime') >= ?",
+        [user.id, shiftStart]
+      );
+
+      const closed = await window.api.ops.closeShift(activeShiftId, {
+        end_time: endTime, duration, total_sales: stats.cnt, total_amount: stats.total,
+        total_paid: stats.paid, total_remaining: stats.remaining, total_expenses: exp.total,
+        total_cost: cost.total, total_debt: debt.total, total_paid_debt: paidDebt.total
+      });
+      if (!closed.success) { window.showAlert(closed.message, 'error'); return; }
+      const hrs = Math.floor(duration / 60);
+      const mins = duration % 60;
+      window.showAlert(`✅ تم إنهاء الشيفت\nالمدة: ${hrs} ساعة و ${mins} دقيقة\nالمبيعات: ${stats.cnt} فاتورة — ${Number(stats.total).toLocaleString()} ${window.currencySymbol}`);
+      checkActiveShift();
+    }
+
+    async function suspendInvoice() {
+      if (cart.length === 0) { window.showAlert('السلة فارغة، لا يوجد فاتورة للتعليق', 'error'); return; }
+      if (!await window.showConfirm('هل تريد تعليق هذه الفاتورة؟ يمكنك استرجاعها لاحقاً.')) return;
+      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const discountAmount = document.getElementById('discountAmount').value || 0;
+      const discountType = document.getElementById('discountType').value;
+      const invoiceDate = document.getElementById('invoiceDate').value || new Date().toISOString().split('T')[0];
+      const customerInput = document.getElementById('customerInput');
+      const customerId = customerInput.dataset.customerId || null;
+      const customerName = customerInput.value || '';
+      const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+      const vodafoneInput = document.querySelector('.payment-method-input[data-method="vodafone"]');
+      const instapayInput = document.querySelector('.payment-method-input[data-method="instapay"]');
+      const paymentMethods = JSON.stringify({
+        cash: cashInput ? cashInput.value : '0',
+        vodafone: vodafoneInput ? vodafoneInput.value : '0',
+        instapay: instapayInput ? instapayInput.value : '0'
+      });
+      const items = cart.map(x => ({ id: x.id, name: x.name, qty: x.qty, price: x.price, buy_price: x.buy_price || 0 }));
+      const result = await window.api.db.get('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM suspended_invoices');
+      const seq = String(result?.nextId || 1).padStart(5, '0');
+      await window.api.db.run(
+        'INSERT INTO suspended_invoices (invoice_number, user_id, customer_id, customer_name, items, discount_amount, discount_type, invoice_date, payment_methods, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ['SUSP-' + seq, user.id, customerId, customerName, JSON.stringify(items), discountAmount, discountType, invoiceDate, paymentMethods, total]
+      );
+      cart = [];
+      document.getElementById('discountAmount').value = 0;
+      document.getElementById('discountType').value = 'amount';
+      document.getElementById('discountDisplay').textContent = '';
+      document.querySelectorAll('.payment-method-input').forEach(inp => inp.value = 0);
+      document.getElementById('invoiceDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('invoiceDate').style.borderColor = '';
+      const custInput = document.getElementById('customerInput');
+      custInput.value = '';
+      delete custInput.dataset.customerId;
+      localStorage.removeItem('posCartState');
+      renderCart();
+      window.showAlert('✅ تم تعليق الفاتورة بنجاح');
+      loadSuspendedInvoices();
+    }
+
+    async function loadSuspendedInvoices() {
+      const rows = await window.api.db.all("SELECT id, invoice_number, customer_name, total_amount, created_at FROM suspended_invoices ORDER BY created_at DESC");
+      const btn = document.getElementById('suspendedBtn');
+      const countSpan = document.getElementById('suspendedCount');
+      if (rows.length > 0) {
+        btn.style.display = 'block';
+        countSpan.textContent = rows.length;
+      } else {
+        btn.style.display = 'none';
+        countSpan.textContent = '0';
+      }
+      window._suspendedInvoices = rows;
+    }
+
+    async function showSuspendedModal() {
+      const rows = await window.api.db.all("SELECT * FROM suspended_invoices ORDER BY created_at DESC");
+      const list = document.getElementById('suspendedList');
+      if (rows.length === 0) {
+        list.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">لا توجد فواتير معلقة</div>';
+      } else {
+        list.innerHTML = rows.map(r => {
+          const items = JSON.parse(r.items || '[]');
+          const itemSummary = items.slice(0, 3).map(x => `${x.name} x${x.qty}`).join('، ');
+          const more = items.length > 3 ? `... و${items.length - 3} أخرى` : '';
+          return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:#f9f9f9;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
+              <div><strong>${r.invoice_number}</strong> - ${r.customer_name || 'بدون عميل'}</div>
+              <div style="font-size:12px;color:#999;">${r.created_at}</div>
+            </div>
+            <div style="font-size:13px;margin:4px 0;">${itemSummary}${more}</div>
+            <div style="font-size:14px;font-weight:700;color:var(--accent);">${Number(r.total_amount).toLocaleString()} ${window.currencySymbol}</div>
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button class="btn btn-sm btn-primary" onclick="restoreSuspendedInvoice(${r.id})">🔄 استرجاع</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteSuspendedInvoice(${r.id})">✕ حذف</button>
+            </div>
+          </div>`;
+        }).join('');
+      }
+      document.getElementById('suspendedModal').style.display = 'flex';
+    }
+
+    function closeSuspendedModal() {
+      document.getElementById('suspendedModal').style.display = 'none';
+    }
+
+    async function restoreSuspendedInvoice(id) {
+      if (cart.length > 0) {
+        if (!await window.showConfirm('السلة تحتوي على منتجات. هل تريد استبدالها بالفاتورة المعلقة؟')) return;
+      }
+      const row = await window.api.db.get("SELECT * FROM suspended_invoices WHERE id=?", [id]);
+      if (!row) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
+      const items = JSON.parse(row.items || '[]');
+      cart = items.map(x => ({ id: x.id, name: x.name, qty: x.qty, price: x.price, buy_price: x.buy_price || 0 }));
+      document.getElementById('discountAmount').value = row.discount_amount || 0;
+      document.getElementById('discountType').value = row.discount_type || 'amount';
+      if (row.invoice_date) document.getElementById('invoiceDate').value = row.invoice_date;
+      const custInput = document.getElementById('customerInput');
+      custInput.value = row.customer_name || '';
+      if (row.customer_id) custInput.dataset.customerId = row.customer_id;
+      else delete custInput.dataset.customerId;
+      if (row.payment_methods) {
+        const pm = JSON.parse(row.payment_methods);
+        const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
+        const vodafoneInput = document.querySelector('.payment-method-input[data-method="vodafone"]');
+        const instapayInput = document.querySelector('.payment-method-input[data-method="instapay"]');
+        if (cashInput) cashInput.value = pm.cash || '0';
+        if (vodafoneInput) vodafoneInput.value = pm.vodafone || '0';
+        if (instapayInput) instapayInput.value = pm.instapay || '0';
+      }
+      await window.api.db.run("DELETE FROM suspended_invoices WHERE id=?", [id]);
+      closeSuspendedModal();
+      recomputeLinePrices();
+      renderCart();
+      loadSuspendedInvoices();
+      window.showAlert('✅ تم استرجاع الفاتورة المعلقة');
+    }
+
+    async function deleteSuspendedInvoice(id) {
+      if (!await window.showConfirm('هل تريد حذف هذه الفاتورة المعلقة؟')) return;
+      await window.api.db.run("DELETE FROM suspended_invoices WHERE id=?", [id]);
+      showSuspendedModal();
+      loadSuspendedInvoices();
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'F12') { e.preventDefault(); completeSale(true); }
+      if (e.key === 'F1') { e.preventDefault(); cart = []; renderCart(); saveCartState(); }
+      if (e.key === 'Delete' && cart.length > 0) { e.preventDefault(); removeFromCart(cart.length - 1); }
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key.length === 1 || e.key === 'Enter') {
+        document.getElementById('productSearch').focus();
+      }
+    });
+    loadData();
+    loadSuspendedInvoices();
+    checkActiveShift();
+    setTimeout(() => document.getElementById('productSearch').focus(), 300);
+  </script>
+  <script src="../js/sidebar.js"></script>
+  <script>
+    // Manual discount is a separate permission; promotion discounts still apply.
+    if (!window.can('pos','discount')) {
+      var dr = document.getElementById('manualDiscountRow');
+      if (dr) dr.style.display = 'none';
+      var da = document.getElementById('discountAmount');
+      if (da) { da.value = 0; da.disabled = true; }
+    }
+  </script>
+</body>
+</html>

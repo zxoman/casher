@@ -1,0 +1,322 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>المنتجات - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>إدارة المنتجات</h2>
+        <div>
+          <button class="btn btn-sm btn-primary" onclick="showProductModal()" id="addProductBtn" style="${window.can('products','a')?'':'display:none'}">➕ إضافة منتج</button>
+        </div>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="بحث..." oninput="loadProducts()">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr>          <th>حساب</th><th>الباركود</th><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>سعر الجملة</th><th>أقل سعر بيع</th><th>المخزون</th><th>الحد الأدنى</th><th>رأس المال</th><th>الإجراءات</th></tr></thead>
+          <tbody id="productsTable"></tbody>
+        </table>
+      </div>
+      <div id="productsPager" style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;padding:12px 0 4px"></div>
+    </main>
+  </div>
+  <div id="productModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h2 id="modalTitle">إضافة منتج</h2>
+      <form id="productForm">
+        <input type="hidden" id="productId">
+        <div class="form-row">
+          <div class="form-group"><label>الباركود</label><input type="text" id="pBarcode"></div>
+          <div class="form-group"><label>الاسم *</label><input type="text" id="pName" required></div>
+        </div>
+        <div class="form-group"><label>التصنيف</label><select id="pCategory"> <option value="">بدون تصنيف</option></select></div>
+        <div class="form-row">
+          <div class="form-group"><label>سعر الشراء</label><input type="number" id="pBuyPrice" step="0.01"></div>
+          <div class="form-group"><label>سعر البيع *</label><input type="number" id="pSellPrice" step="0.01" required></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>سعر الجملة</label><input type="number" id="pWholesalePrice" step="0.01"></div>
+          <div class="form-group"><label>أقل سعر بيع</label><input type="number" id="pMinSellPrice" step="0.01"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>المخزون</label><input type="number" id="pStock" value="0"></div>
+          <div class="form-group"><label>الحد الأدنى</label><input type="number" id="pMinStock" value="5"></div>
+        </div>
+        <div class="form-group"><label>وصف</label><textarea id="pDescription" rows="2"></textarea></div>
+        <div id="compositionSection" style="display:none;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
+          <strong style="display:block;margin-bottom:8px;">🔗 ربط منتجات (علبة و وحدات)</strong>
+          <div class="form-group" style="margin-bottom:6px"><label>unit product (المنتج المفرد)</label>
+            <select id="pCompUnitId" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;"><option value="">بدون ربط</option></select>
+          </div>
+          <div class="form-group" style="margin-bottom:0"><label>عدد الوحدات في العلبة</label><input type="number" id="pCompQty" min="1" value="1" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">حفظ</button>
+        <button type="button" class="btn" style="background:var(--border);margin-top:8px;" onclick="closeModal('productModal')">إلغاء</button>
+      </form>
+    </div>
+  </div>
+  <script src="../js/pager.js"></script>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    const prodPager = window.TablePager.create({
+      container: 'productsPager', size: 20, label: 'منتج',
+      onGo: function () { loadProducts(); }
+    });
+    function goToProdPage(n) { prodPager.go(n); }
+
+    async function loadProducts() {
+      const q = document.getElementById('searchInput').value.trim();
+      prodPager.syncFilter(q);
+      let where = ``;
+      let params = [];
+      if (q) { where = " AND (p.name LIKE ? OR p.barcode LIKE ?)"; params.push(`%${q}%`, `%${q}%`); }
+      // p.id breaks ties so a page can't repeat or skip a row between loads
+      const sql = "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE 1=1" + where + " ORDER BY p.name, p.id LIMIT ? OFFSET ?";
+      const cnt = await window.api.db.get("SELECT COUNT(*) AS c FROM products p WHERE 1=1" + where, params);
+      const total = (cnt && cnt.c) || 0;
+      prodPager.clamp(total);
+      const allProducts = await window.api.db.all(sql, [...params, prodPager.limit, prodPager.offset]);
+      prodPager.render(total);
+      const comps = await window.api.db.all("SELECT * FROM product_compositions");
+      const compMap = {};
+      for (const c of comps) compMap[c.container_id] = c;
+
+      // A container's stock is derived from its unit product, which is not
+      // necessarily on the page being drawn. Fetch the unit rows by id instead
+      // of looking them up in allProducts, which is now just one page.
+      const unitIds = [...new Set(allProducts.map(p => compMap[p.id]).filter(Boolean).map(c => c.unit_id))];
+      const unitStockMap = {};
+      if (unitIds.length) {
+        const units = await window.api.db.all("SELECT id, stock FROM products WHERE id IN (" + unitIds.map(() => '?').join(',') + ")", unitIds);
+        for (const u of units) unitStockMap[u.id] = u.stock || 0;
+      }
+
+      document.getElementById('productsTable').innerHTML = allProducts.map(p => {
+        const low = p.stock <= p.min_stock;
+        const comp = compMap[p.id];
+        let stockDisplay;
+        if (comp) {
+          const unitStock = unitStockMap[comp.unit_id] || 0;
+          const derivedStock = Math.floor(unitStock / comp.units_per_container);
+          stockDisplay = `<span style="color:var(--success);font-weight:700">${derivedStock}</span> <span style="font-size:10px;color:var(--text-secondary)">(= ${unitStock} وحدة)</span>`;
+        } else {
+          stockDisplay = `<span style="color:${low?'var(--danger)':'inherit'}">${p.stock||0}</span>`;
+        }
+        return `<tr>
+          <td style="text-align:center"><input type="checkbox" ${p.in_capital !== 0 ? 'checked' : ''} onchange="toggleInCapital(${p.id}, this.checked)"></td>
+          <td>${p.barcode || '-'}</td>
+          <td>${p.name} ${comp ? '<span style="font-size:10px;color:var(--warning)">📦</span>' : ''}</td>
+          <td style="font-size:12px;color:var(--primary)">${p.category_name || '-'}</td>
+          <td>${Number(p.buy_price).toLocaleString()}</td>
+          <td>${Number(p.sell_price).toLocaleString()}</td>
+          <td>${Number(p.wholesale_price).toLocaleString()}</td>
+          <td>${Number(p.min_sell_price).toLocaleString()}</td>
+          <td>${stockDisplay}</td>
+          <td>${p.min_stock}</td>
+          <td style="font-weight:700;color:var(--primary)">${Number((p.stock||0) * (p.buy_price||0)).toLocaleString()}</td>
+          <td class="actions">
+            <button class="btn btn-sm btn-primary" onclick="editProduct(${p.id})" style="${window.can('products','e')?'':'display:none'}">تعديل</button>
+            <button class="btn btn-sm btn-info" onclick="printBarcode(${p.id})" style="${window.can('products','e')?'':'display:none'}">🏷️</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p.id})" style="${window.can('products','d')?'':'display:none'}">حذف</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function loadUnitProductSelect(currentUnitId) {
+      const allProds = await window.api.db.all("SELECT id, name FROM products ORDER BY name");
+      const sel = document.getElementById('pCompUnitId');
+      sel.innerHTML = '<option value="">بدون ربط</option>' + allProds.map(p => `<option value="${p.id}" ${p.id == currentUnitId ? 'selected' : ''}>${p.name}</option>`).join('');
+    }
+
+    async function showProductModal(editId) {
+      document.getElementById('modalTitle').textContent = 'إضافة منتج';
+      document.getElementById('productForm').reset();
+      document.getElementById('productId').value = '';
+      document.getElementById('compositionSection').style.display = 'block';
+      document.getElementById('pCompUnitId').value = '';
+      document.getElementById('pCompQty').value = '1';
+      document.getElementById('pStock').readOnly = false;
+      document.getElementById('pStock').style.background = '';
+      document.getElementById('pStock').title = '';
+      await loadUnitProductSelect(null);
+      document.getElementById('productModal').style.display = 'flex';
+    }
+
+    async function editProduct(id) {
+      const p = await window.api.db.get("SELECT * FROM products WHERE id = ?", [id]);
+      document.getElementById('modalTitle').textContent = 'تعديل منتج';
+      document.getElementById('productId').value = p.id;
+      document.getElementById('pBarcode').value = p.barcode || '';
+      document.getElementById('pName').value = p.name;
+      document.getElementById('pCategory').value = p.category_id || '';
+      document.getElementById('pBuyPrice').value = p.buy_price;
+      document.getElementById('pSellPrice').value = p.sell_price;
+      document.getElementById('pWholesalePrice').value = p.wholesale_price;
+      document.getElementById('pMinSellPrice').value = p.min_sell_price;
+      document.getElementById('pStock').value = p.stock || 0;
+      document.getElementById('pMinStock').value = p.min_stock;
+      document.getElementById('pDescription').value = p.description || '';
+      document.getElementById('compositionSection').style.display = 'block';
+      const comp = await window.api.db.get("SELECT * FROM product_compositions WHERE container_id=?", [id]);
+      await loadUnitProductSelect(comp ? comp.unit_id : null);
+      document.getElementById('pCompUnitId').value = comp ? comp.unit_id : '';
+      document.getElementById('pCompQty').value = comp ? comp.units_per_container : 1;
+      if (comp) {
+        const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [comp.unit_id]);
+        const derived = Math.floor((unit ? unit.stock : 0) / comp.units_per_container);
+        document.getElementById('pStock').value = derived;
+        document.getElementById('pStock').readOnly = true;
+        document.getElementById('pStock').style.background = '#f5f5f5';
+        document.getElementById('pStock').title = 'المخزون مشتق من المنتج المفرد — لا يمكن تعديله';
+      } else {
+        document.getElementById('pStock').readOnly = false;
+        document.getElementById('pStock').style.background = '';
+        document.getElementById('pStock').title = '';
+      }
+      document.getElementById('productModal').style.display = 'flex';
+    }
+
+    document.getElementById('productForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('productId').value;
+      const unitId = document.getElementById('pCompUnitId').value;
+      const compQty = parseInt(document.getElementById('pCompQty').value) || 1;
+      const isContainer = !!unitId;
+      let stock = parseInt(document.getElementById('pStock').value) || 0;
+      if (isContainer) {
+        const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [unitId]);
+        stock = Math.floor((unit ? unit.stock : 0) / compQty);
+      }
+      const categoryId = document.getElementById('pCategory').value || null;
+      const data = [
+        document.getElementById('pBarcode').value,
+        document.getElementById('pName').value,
+        categoryId,
+        parseFloat(document.getElementById('pBuyPrice').value) || 0,
+        parseFloat(document.getElementById('pSellPrice').value) || 0,
+        parseFloat(document.getElementById('pWholesalePrice').value) || 0,
+        parseFloat(document.getElementById('pMinSellPrice').value) || 0,
+        stock,
+        parseInt(document.getElementById('pMinStock').value) || 5,
+        document.getElementById('pDescription').value
+      ];
+
+      if (id) {
+        const barcode = document.getElementById('pBarcode').value || ('P' + String(id).padStart(5, '0'));
+        data[0] = barcode;
+        const old = await window.api.db.get("SELECT stock FROM products WHERE id=?", [id]);
+        const increase = Math.max(0, stock - (old.stock||0));
+        const buyPrice = parseFloat(document.getElementById('pBuyPrice').value) || 0;
+        if (increase > 0 && buyPrice > 0 && !isContainer) {
+          const cost = increase * buyPrice;
+          if (await window.showConfirm(`هل تريد خصم ${cost.toLocaleString()} ${window.currencySymbol} من الخزينة مقابل زيادة المخزون؟`)) {
+            await window.api.cash.addTreasuryEntry(-cost, 'زيادة مخزون - ' + document.getElementById('pName').value + ' (' + increase + ' وحدة)');
+          }
+        }
+        await window.api.db.run('UPDATE products SET barcode=?, name=?, category_id=?, buy_price=?, sell_price=?, wholesale_price=?, min_sell_price=?, stock=?, min_stock=?, description=? WHERE id=?', [...data, id]);
+        // Save composition link
+        await window.api.db.run("DELETE FROM product_compositions WHERE container_id=?", [id]);
+        if (unitId && compQty > 0) {
+          await window.api.db.run("INSERT INTO product_compositions (container_id, unit_id, units_per_container) VALUES (?, ?, ?)", [id, unitId, compQty]);
+        }
+      } else {
+        const result = await window.api.db.run('INSERT INTO products (barcode, name, category_id, buy_price, sell_price, wholesale_price, min_sell_price, stock, min_stock, description) VALUES (?,?,?,?,?,?,?,?,?,?)', data);
+        if (!document.getElementById('pBarcode').value) {
+          const genBarcode = 'P' + String(result.lastInsertRowid).padStart(5, '0');
+          await window.api.db.run('UPDATE products SET barcode=? WHERE id=?', [genBarcode, result.lastInsertRowid]);
+        }
+        // Save composition link for new product
+        const newId = result.lastInsertRowid || result.id;
+        const newUnitId = document.getElementById('pCompUnitId').value;
+        const newCompQty = parseInt(document.getElementById('pCompQty').value) || 1;
+        if (newUnitId && newCompQty > 0) {
+          await window.api.db.run("INSERT INTO product_compositions (container_id, unit_id, units_per_container) VALUES (?, ?, ?)", [newId, newUnitId, newCompQty]);
+        }
+      }
+      closeModal('productModal');
+      await syncProductContainerStocks();
+      loadProducts();
+    });
+
+    async function syncProductContainerStocks() {
+      const links = await window.api.db.all("SELECT * FROM product_compositions");
+      for (const l of links) {
+        const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [l.unit_id]);
+        const derived = Math.floor((unit ? unit.stock : 0) / l.units_per_container);
+        await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, l.container_id]);
+      }
+    }
+
+    async function deleteProduct(id) {
+      if (!await window.showConfirm('هل أنت متأكد من حذف هذا المنتج؟')) return;
+      await window.api.db.run('DELETE FROM products WHERE id = ?', [id]);
+      await window.api.db.run('DELETE FROM product_compositions WHERE container_id = ? OR unit_id = ?', [id, id]);
+      loadProducts();
+    }
+
+    async function printBarcode(id) {
+      const p = await window.api.db.get("SELECT barcode, name, sell_price FROM products WHERE id=?", [id]);
+      const code = p.barcode || ('P' + String(id).padStart(5, '0'));
+      const win = window.open('', '_blank', 'width=250,height=100');
+      win.document.write(`<html dir="ltr"><head><style>
+        body{margin:0;padding:0;font-family:sans-serif}
+        .label{text-align:center;padding:0;margin:0;position:absolute;top:0;left:0;right:0}
+        .label .top{font-size:8px;font-weight:bold;line-height:1;margin-bottom:2px}
+        .label .top .price{color:#c00;font-weight:bold}
+        @media print{@page{margin:0;size:auto}body{margin:0;padding:0}}
+        svg{max-width:200px;height:auto}
+      </style></head><body><div class="label">
+        <div class="top"><span class="name">${p.name}</span><span class="price"> (${Number(p.sell_price).toLocaleString()} ${window.currencySymbol || 'ج.م'})</span></div>
+        <svg id="barcode"></svg>
+        <div style="height:6px"></div>
+        <svg id="barcode2"></svg>
+      </div>
+      <script src="../js/JsBarcode.all.min.js"><\/script>
+      <script>
+        JsBarcode("#barcode", "${code}", {width:1,height:28,displayValue:true,fontSize:9,margin:0});
+        JsBarcode("#barcode2", "${code}", {width:1,height:28,displayValue:true,fontSize:9,margin:0});
+        setTimeout(() => { window.print(); window.close(); }, 200);
+      <\/script>
+      </body></html>`);
+      win.document.close();
+    }
+
+    async function loadCategorySelect() {
+      const cats = await window.api.db.all("SELECT * FROM categories ORDER BY name");
+      const sel = document.getElementById('pCategory');
+      sel.innerHTML = '<option value="">بدون تصنيف</option>' + cats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    }
+
+    async function toggleInCapital(id, checked) {
+      await window.api.db.run("UPDATE products SET in_capital = ? WHERE id = ?", [checked ? 1 : 0, id]);
+    }
+
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    loadProducts();
+    loadCategorySelect();
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>

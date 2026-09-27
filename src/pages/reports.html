@@ -1,0 +1,694 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>التقارير - نظام الكاشير</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="logo"><span id="shopNameDisplay">...</span></div>
+      <nav></nav>
+      <div class="user-footer">
+        <div class="avatar" id="userAvatar">م</div>
+        <div>
+          <div class="user-name" id="userNameDisplay"></div>
+          <div class="user-role" id="userRoleDisplay"></div>
+        </div>
+        <a href="#" id="logoutBtn" title="تسجيل الخروج" style="color:var(--danger);text-decoration:none;font-size:18px;">🚪</a>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="header">
+        <h2>التقارير</h2>
+      </div>
+      <div class="search-bar">
+        <select id="reportType" onchange="loadReport()">
+          <option value="general">التقرير العام</option>
+          <option value="sales">تقرير المبيعات</option>
+          <option value="purchases">تقرير المشتريات</option>
+          <option value="expenses">تقرير المصروفات</option>
+          <option value="profit">تقرير الأرباح</option>
+          <option value="stock">تقرير المخزون</option>
+          <option value="lowstock">تقرير المخزون المنخفض</option>
+          <option value="category">تقرير التصنيف</option>
+          <option value="cash">حركة الخزينة</option>
+          <option value="debts">تقرير الديون</option>
+          <option value="product">تقرير المنتج</option>
+        </select>
+        <input type="date" id="dateFrom">
+        <input type="date" id="dateTo">
+        <select id="categorySelect" style="display:none;min-width:180px"><option value="">اختر التصنيف</option></select>
+        <select id="productSelect" style="display:none;min-width:180px" onchange="loadReport()"><option value="">كل المنتجات</option></select>
+        <select id="daySelect" onchange="selectDay()" style="min-width:150px">
+          <option value="">اختر يوماً</option>
+        </select>
+        <button class="btn btn-sm" style="background:var(--primary);color:#fff" onclick="setPeriod('today')">اليوم</button>
+        <button class="btn btn-sm" style="background:var(--success);color:#fff" onclick="setPeriod('month')">الشهر</button>
+        <button class="btn btn-sm" style="background:var(--warning);color:#fff" onclick="setPeriod('year')">السنة</button>
+        <button class="btn btn-sm btn-primary" onclick="loadReport()">عرض</button>
+        <button class="btn btn-sm btn-success" onclick="exportPDF()">تصدير PDF</button>
+      </div>
+      <div class="cards" id="reportCards"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div class="card"><canvas id="reportChart"></canvas></div>
+        <div class="card" id="topProductsCard"></div>
+      </div>
+      <div class="table-container">
+        <div style="padding:16px;font-weight:600;" id="reportTitle">التقرير</div>
+        <table>
+          <thead id="reportHeaders"></thead>
+          <tbody id="reportBody"></tbody>
+        </table>
+      </div>
+      <div id="purchasesDetailContainer"></div>
+    </main>
+  </div>
+  <script>
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
+
+    let chart;
+
+    function populateDaySelect() {
+      const sel = document.getElementById('daySelect');
+      sel.innerHTML = '<option value="">اختر يوماً</option>';
+      for (let i = 0; i < 31; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const val = d.toISOString().split('T')[0];
+        const label = d.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label + (i === 0 ? ' (اليوم)' : '');
+        sel.appendChild(opt);
+      }
+    }
+
+    function selectDay() {
+      const val = document.getElementById('daySelect').value;
+      if (!val) return;
+      document.getElementById('dateFrom').value = val;
+      document.getElementById('dateTo').value = val;
+      loadReport();
+    }
+
+    function getDates() {
+      const from = document.getElementById('dateFrom').value || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+      const to = document.getElementById('dateTo').value || new Date().toISOString().split('T')[0];
+      return { from, to };
+    }
+
+    function setPeriod(period) {
+      const d = new Date();
+      const today = d.toISOString().split('T')[0];
+      if (period === 'today') {
+        document.getElementById('dateFrom').value = today;
+        document.getElementById('dateTo').value = today;
+      } else if (period === 'month') {
+        const first = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+        document.getElementById('dateFrom').value = first;
+        document.getElementById('dateTo').value = today;
+      } else if (period === 'year') {
+        const first = new Date(d.getFullYear(), 0, 1).toISOString().split('T')[0];
+        document.getElementById('dateFrom').value = first;
+        document.getElementById('dateTo').value = today;
+      }
+      loadReport();
+    }
+
+    async function loadReport() {
+      const type = document.getElementById('reportType').value;
+      const catSel = document.getElementById('categorySelect');
+      const prodSel = document.getElementById('productSelect');
+      catSel.style.display = type === 'category' ? 'inline-block' : 'none';
+      prodSel.style.display = type === 'product' ? 'inline-block' : 'none';
+      const { from, to } = getDates();
+      const productId = prodSel.value || null;
+      switch(type) {
+        case 'general': loadGeneralReport(from, to); break;
+        case 'sales': loadSalesReport(from, to); break;
+        case 'purchases': loadPurchasesReport(from, to); break;
+        case 'expenses': loadExpensesReport(from, to); break;
+        case 'profit': loadProfitReport(from, to); break;
+        case 'stock': loadStockReport(); break;
+        case 'lowstock': loadLowStockReport(); break;
+        case 'category': loadCategoryReport(from, to); break;
+        case 'cash': loadCashReport(from, to); break;
+        case 'debts': loadDebtsReport(); break;
+        case 'product': loadProductReport(from, to, productId); break;
+      }
+    }
+
+    window.togglePurchaseItems = function(id) {
+      const row = document.getElementById('purchaseItems_' + id);
+      row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+    };
+
+    async function loadSalesReport(from, to) {
+      // no JOIN users: SQL_BLOCKED_TABLES denies it and the report came back empty
+      const names = Object.fromEntries((await window.api.users.nameMap()).map(u => [u.id, u.full_name]));
+      const sales = await window.api.db.all("SELECT s.*, c.name as cust_name FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE date(s.created_at) BETWEEN ? AND ? ORDER BY s.created_at DESC", [from, to]);
+      sales.forEach(s => { s.user_name = names[s.user_id] || ''; });
+      const total = sales.reduce((s, x) => s + x.total_amount, 0);
+
+      document.getElementById('reportTitle').textContent = `تقرير المبيعات من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>رقم الفاتورة</th><th>العميل</th><th>المبلغ</th><th>الخصم</th><th>المدفوع</th><th>الكاشير</th><th>التاريخ</th></tr>';
+      document.getElementById('reportBody').innerHTML = sales.map(s =>
+        `<tr><td>${s.invoice_number}</td><td>${s.cust_name || 'نقدي'}</td><td>${Number(s.total_amount).toLocaleString()}</td><td>${Number(s.discount).toLocaleString()}</td><td>${Number(s.paid_amount).toLocaleString()}</td><td>${s.user_name || ''}</td><td>${s.created_at}</td></tr>`
+      ).join('');
+      document.getElementById('reportCards').innerHTML = `<div class="card"><h3>إجمالي المبيعات</h3><div class="value blue">${total.toLocaleString()}</div></div><div class="card"><h3>عدد الفواتير</h3><div class="value">${sales.length}</div></div>`;
+      updateChart('line', ['إجمالي المبيعات'], [total]);
+    }
+
+    async function loadPurchasesReport(from, to) {
+      const purchases = await window.api.db.all("SELECT pu.*, s.name as sup_name FROM purchases pu LEFT JOIN suppliers s ON pu.supplier_id = s.id WHERE date(pu.created_at) BETWEEN ? AND ? ORDER BY pu.created_at DESC", [from, to]);
+      const total = purchases.reduce((s, x) => s + x.total_amount, 0);
+      document.getElementById('reportTitle').textContent = `تقرير المشتريات من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>رقم الفاتورة</th><th>المورد</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th></tr>';
+      document.getElementById('reportBody').innerHTML = purchases.map(p =>
+        `<tr><td>${p.invoice_number}</td><td>${p.sup_name || '-'}</td><td>${Number(p.total_amount).toLocaleString()}</td><td>${Number(p.paid_amount).toLocaleString()}</td><td>${Number(p.remaining_amount).toLocaleString()}</td><td>${p.created_at}</td></tr>`
+      ).join('');
+      document.getElementById('reportCards').innerHTML = `<div class="card"><h3>إجمالي المشتريات</h3><div class="value red">${total.toLocaleString()}</div></div><div class="card"><h3>عدد الفواتير</h3><div class="value">${purchases.length}</div></div>`;
+      updateChart('bar', ['إجمالي المشتريات'], [total]);
+    }
+
+    async function loadExpensesReport(from, to) {
+      const expenses = await window.api.db.all("SELECT * FROM expenses WHERE date(created_at) BETWEEN ? AND ? ORDER BY created_at DESC", [from, to]);
+      const total = expenses.reduce((s, x) => s + x.amount, 0);
+      document.getElementById('reportTitle').textContent = `تقرير المصروفات من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>الوصف</th><th>الفئة</th><th>المبلغ</th><th>التاريخ</th></tr>';
+      document.getElementById('reportBody').innerHTML = expenses.map(e =>
+        `<tr><td>${e.description}</td><td>${e.category || '-'}</td><td style="color:var(--danger)">${Number(e.amount).toLocaleString()}</td><td>${e.created_at}</td></tr>`
+      ).join('');
+      document.getElementById('reportCards').innerHTML = `<div class="card"><h3>إجمالي المصروفات</h3><div class="value red">${total.toLocaleString()}</div></div><div class="card"><h3>عدد العمليات</h3><div class="value">${expenses.length}</div></div>`;
+      updateChart('pie', expenses.map(e => e.category || 'أخرى'), expenses.reduce((acc, e) => { const cat = e.category || 'أخرى'; acc[cat] = (acc[cat] || 0) + e.amount; return acc; }, {}));
+    }
+
+    async function loadProfitReport(from, to) {
+      const [sales, totalSales, totalPurchases, totalExpenses, costOfSales, periodReturns, returnsCost, periodDiscounts, periodSalesDebt] = await Promise.all([
+        window.api.db.all("SELECT COALESCE(SUM(si.total - (si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price))),0) as profit FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE date(s.created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(total_amount),0) as total FROM sales WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(total_amount),0) as total FROM purchases WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE date(s.created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM returns WHERE date(created_at) BETWEEN ? AND ? AND (type IS NULL OR type='sale')", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(r.quantity * COALESCE(p.buy_price, 0)), 0) as t FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE date(r.created_at) BETWEEN ? AND ? AND (r.type IS NULL OR r.type='sale')", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(discount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ? AND remaining_amount>0", [from, to])
+      ]);
+
+      const netSales = totalSales.total - periodReturns.t;
+      const netCost = costOfSales.total - returnsCost.t;
+      const netProfit = sales[0].profit - periodDiscounts.t - totalExpenses.total - periodReturns.t + returnsCost.t - periodSalesDebt.t;
+
+      document.getElementById('reportTitle').textContent = `تقرير الأرباح من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>البيان</th><th>المبلغ</th></tr>';
+      document.getElementById('reportBody').innerHTML =
+        `<tr><td>صافي المبيعات</td><td style="color:var(--success)">${Number(netSales).toLocaleString()}</td></tr>
+         <tr><td>المرتجعات</td><td style="color:var(--danger)">-${Number(periodReturns.t).toLocaleString()}</td></tr>
+         <tr><td>الخصم</td><td style="color:var(--danger)">-${Number(periodDiscounts.t).toLocaleString()}</td></tr>
+         <tr><td>إجمالي المبيعات (قبل الخصم والإرجاع)</td><td style="color:var(--success)">${Number(totalSales.total).toLocaleString()}</td></tr>
+         <tr><td>صافي تكلفة المبيعات</td><td style="color:var(--danger)">${Number(netCost).toLocaleString()}</td></tr>
+         <tr><td>تكلفة المرتجعات</td><td style="color:var(--danger)">-${Number(returnsCost.t).toLocaleString()}</td></tr>
+         <tr><td>إجمالي الربح (صافي)</td><td style="color:var(--success);font-weight:700">${Number(sales[0].profit).toLocaleString()}</td></tr>
+         <tr><td>إجمالي المشتريات</td><td style="color:var(--danger)">${Number(totalPurchases.total).toLocaleString()}</td></tr>
+         <tr><td>ديون الفترة (غير المحصلة)</td><td style="color:var(--danger)">-${Number(periodSalesDebt.t).toLocaleString()}</td></tr>
+         <tr><td>إجمالي المصروفات</td><td style="color:var(--danger)">${Number(totalExpenses.total).toLocaleString()}</td></tr>
+         <tr><td><strong>صافي الربح</strong></td><td style="color:${netProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700;font-size:16px">${netProfit.toLocaleString()}</td></tr>`;
+      document.getElementById('reportCards').innerHTML =
+        `<div class="card"><h3>صافي المبيعات</h3><div class="value blue">${Number(netSales).toLocaleString()}</div></div>
+         <div class="card"><h3>صافي تكلفة المبيعات</h3><div class="value red">${Number(netCost).toLocaleString()}</div></div>
+         <div class="card"><h3>صافي الربح</h3><div class="value ${netProfit >= 0 ? 'green' : 'red'}">${netProfit.toLocaleString()}</div></div>`;
+      updateChart('bar', ['صافي المبيعات', 'المرتجعات', 'الخصم', 'صافي التكلفة', 'المشتريات', 'المصروفات', 'ديون الفترة', 'صافي الربح'], [netSales, -periodReturns.t, -periodDiscounts.t, -netCost, -totalPurchases.total, -totalExpenses.total, -periodSalesDebt.t, netProfit]);
+    }
+
+    async function loadStockReport() {
+      const products = await window.api.db.all("SELECT * FROM products ORDER BY name ASC");
+      document.getElementById('reportTitle').textContent = 'تقرير المخزون';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>المخزون</th><th>الحد الأدنى</th><th>الحالة</th></tr>';
+      document.getElementById('reportBody').innerHTML = products.map(p => {
+        const low = p.stock <= p.min_stock;
+        return `<tr><td>${p.name}</td>
+          <td style="color:${low?'var(--danger)':'inherit'}">${p.stock||0}</td>
+          <td>${p.min_stock}</td>
+          <td>${low ? '⚠️ منخفض' : '✅ متوفر'}</td></tr>`;
+      }).join('');
+      const low = products.filter(p => p.stock <= p.min_stock);
+      document.getElementById('reportCards').innerHTML = `<div class="card"><h3>إجمالي المنتجات</h3><div class="value blue">${products.length}</div></div><div class="card"><h3>منتجات منخفضة</h3><div class="value red">${low.length}</div></div>`;
+      document.getElementById('topProductsCard').innerHTML = '<h3>المنتجات الأكثر مبيعاً</h3>' + await loadTopProducts();
+      updateChart('doughnut', ['متوفر', 'منخفض'], [products.length - low.length, low.length]);
+    }
+
+    async function loadLowStockReport() {
+      const products = await window.api.db.all("SELECT * FROM products WHERE stock <= min_stock ORDER BY stock ASC");
+      document.getElementById('reportTitle').textContent = 'تقرير المخزون المنخفض';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>المخزون</th><th>الحد الأدنى</th><th>العجز</th></tr>';
+      document.getElementById('reportBody').innerHTML = products.map(p => {
+        const deficit = p.min_stock - p.stock;
+        return `<tr><td>${p.name}</td>
+          <td style="color:var(--danger)">${p.stock||0}</td>
+          <td>${p.min_stock}</td>
+          <td style="color:var(--danger);font-weight:700">${deficit > 0 ? deficit : 0}</td></tr>`;
+      }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">لا توجد منتجات منخفضة المخزون</td></tr>';
+      document.getElementById('reportCards').innerHTML = `<div class="card"><h3>المنتجات المنخفضة</h3><div class="value red">${products.length}</div></div>`;
+      document.getElementById('topProductsCard').innerHTML = '';
+      if (window.chart) window.chart.destroy();
+    }
+
+    async function loadProductReport(from, to, productId) {
+      document.getElementById('reportTitle').textContent = `تقرير المنتجات من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>التصنيف</th><th>الباركود</th><th>المخزون</th><th>سعر الشراء</th><th>سعر البيع</th><th>قيمة المخزون</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th><th>الربح</th></tr>';
+
+      let productSql = `
+        SELECT p.id, p.name, p.barcode, p.stock, p.buy_price, p.sell_price, p.min_sell_price,
+               c.name as category_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+      `;
+      let productParams = [];
+      if (productId) {
+        productSql += " WHERE p.id = ?";
+        productParams.push(productId);
+      }
+      productSql += " ORDER BY p.name ASC";
+      const products = await window.api.db.all(productSql, productParams);
+
+      let salesSql = `
+        SELECT si.product_id,
+               COALESCE(SUM(si.quantity), 0) as sold_qty,
+               COALESCE(SUM(si.total), 0) as sold_total,
+               COALESCE(SUM(si.total - (si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price))), 0) as profit
+        FROM sale_items si
+        JOIN products p ON si.product_id = p.id
+        JOIN sales s ON si.sale_id = s.id
+        WHERE date(s.created_at) BETWEEN ? AND ?
+      `;
+      let salesParams = [from, to];
+      if (productId) {
+        salesSql += " AND si.product_id = ?";
+        salesParams.push(productId);
+      }
+      salesSql += " GROUP BY si.product_id";
+      const salesData = await window.api.db.all(salesSql, salesParams);
+
+      const salesMap = {};
+      salesData.forEach(r => { salesMap[r.product_id] = r; });
+
+      let totalStockValue = 0, totalSoldQty = 0, totalSoldAmount = 0, totalProfit = 0;
+
+      document.getElementById('reportBody').innerHTML = products.map(p => {
+        const sd = salesMap[p.id] || { sold_qty: 0, sold_total: 0, profit: 0 };
+        const stockValue = (p.stock || 0) * (p.buy_price || 0);
+        totalStockValue += stockValue;
+        totalSoldQty += sd.sold_qty;
+        totalSoldAmount += sd.sold_total;
+        totalProfit += sd.profit;
+        return `<tr>
+          <td style="font-weight:700">${p.name}</td>
+          <td>${p.category_name || '-'}</td>
+          <td>${p.barcode || '-'}</td>
+          <td>${p.stock || 0}</td>
+          <td>${Number(p.buy_price || 0).toLocaleString()}</td>
+          <td>${Number(p.sell_price || 0).toLocaleString()}</td>
+          <td>${Number(stockValue).toLocaleString()}</td>
+          <td>${sd.sold_qty}</td>
+          <td style="color:var(--success)">${Number(sd.sold_total).toLocaleString()}</td>
+          <td style="color:${sd.profit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${Number(sd.profit).toLocaleString()}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">لا توجد منتجات</td></tr>';
+
+      document.getElementById('reportCards').innerHTML = `
+        <div class="card"><h3>📦 عدد المنتجات</h3><div class="value blue">${products.length}</div></div>
+        <div class="card"><h3>💰 قيمة المخزون</h3><div class="value">${Number(totalStockValue).toLocaleString()}</div></div>
+        <div class="card"><h3>🛒 الكمية المباعة</h3><div class="value green">${totalSoldQty}</div></div>
+        <div class="card"><h3>💵 إجمالي المبيعات</h3><div class="value green">${Number(totalSoldAmount).toLocaleString()}</div></div>
+        <div class="card"><h3>📈 الربح</h3><div class="value ${totalProfit >= 0 ? 'green' : 'red'}">${Number(totalProfit).toLocaleString()}</div></div>
+      `;
+      document.getElementById('topProductsCard').innerHTML = '';
+      if (window.chart) window.chart.destroy();
+    }
+
+    async function loadTopProducts() {
+      const top = await window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 10");
+      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+    }
+
+    async function loadCashReport(from, to) {
+      const drawerRows = await window.api.db.all("SELECT d.*, 'درج' as tbl FROM drawer_log d WHERE date(d.created_at) BETWEEN ? AND ? ORDER BY d.created_at DESC", [from, to]);
+      const treasuryRows = await window.api.db.all("SELECT t.*, 'خزينة' as tbl FROM treasury_log t WHERE date(t.created_at) BETWEEN ? AND ? ORDER BY t.created_at DESC", [from, to]);
+      const combined = [...drawerRows, ...treasuryRows].sort((a, b) => (a.created_at||'').localeCompare(b.created_at||''));
+      const deposits = combined.filter(c => c.amount > 0).reduce((s, x) => s + x.amount, 0);
+      const withdrawals = combined.filter(c => c.amount < 0).reduce((s, x) => s + Math.abs(x.amount), 0);
+      document.getElementById('reportTitle').textContent = `حركة الخزينة والدرج من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>النوع</th><th>المبلغ</th><th>الرصيد</th><th>السبب</th><th>التاريخ</th></tr>';
+      document.getElementById('reportBody').innerHTML = combined.map(c => {
+        const source = c.tbl === 'درج' ? `الدرج (${c.drawer_type || ''})` : 'الخزينة';
+        const typeLabel = c.amount >= 0 ? 'إيداع' : 'سحب';
+        const color = c.amount >= 0 ? 'var(--success)' : 'var(--danger)';
+        return `<tr><td>${typeLabel} - ${source}</td><td style="color:${color}">${Math.abs(c.amount).toLocaleString()}</td><td>${Number(c.balance||0).toLocaleString()}</td><td>${c.reason || '-'}</td><td>${c.created_at}</td></tr>`;
+      }).join('');
+      document.getElementById('reportCards').innerHTML =
+        `<div class="card"><h3>إجمالي الإيداعات</h3><div class="value green">${deposits.toLocaleString()}</div></div>
+         <div class="card"><h3>إجمالي السحوبات</h3><div class="value red">${withdrawals.toLocaleString()}</div></div>
+         <div class="card"><h3>الرصيد</h3><div class="value blue">${(deposits - withdrawals).toLocaleString()}</div></div>`;
+    }
+
+    async function loadGeneralReport(from, to) {
+      document.getElementById('reportTitle').textContent = `التقرير العام من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>البيان</th><th>القيمة</th></tr>';
+
+      const [
+        periodSales, periodPurchases, periodExpenses, periodDiscounts,
+        profitData, totalSales, productsCount, customersCount, suppliersCount,
+        lowStockCount, customerDebt, customerDirectDebt, supplierDebt,
+        topProducts, costOfSales, periodReturns, returnsCost, grossPeriodSales, periodSalesDebt,
+        capitalData
+      ] = await Promise.all([
+        window.api.db.get("SELECT COALESCE(SUM(total_amount - discount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(total_amount),0) as t FROM purchases WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM expenses WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(discount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(si.total - (si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price))),0) as profit FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE date(s.created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(total_amount - discount),0) as t FROM sales"),
+        window.api.db.get("SELECT COUNT(*) as c FROM products"),
+        window.api.db.get("SELECT COUNT(*) as c FROM customers"),
+        window.api.db.get("SELECT COUNT(*) as c FROM suppliers"),
+        window.api.db.get("SELECT COUNT(*) as c FROM products WHERE stock <= min_stock"),
+        window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM sales WHERE remaining_amount>0"),
+        window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM customer_debt_entries"),
+        window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM purchases WHERE remaining_amount>0"),
+        window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 5"),
+        window.api.db.get("SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE date(s.created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM returns WHERE date(created_at) BETWEEN ? AND ? AND (type IS NULL OR type='sale')", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(r.quantity * COALESCE(p.buy_price, 0)), 0) as t FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE date(r.created_at) BETWEEN ? AND ? AND (r.type IS NULL OR r.type='sale')", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(total_amount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ?", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM sales WHERE date(created_at) BETWEEN ? AND ? AND remaining_amount>0", [from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(stock * buy_price),0) as total FROM products WHERE COALESCE(in_capital, 1) = 1")
+      ]);
+
+      const netSales = periodSales.t - periodReturns.t;
+      const netCost = costOfSales.total - returnsCost.t;
+      const bal = await window.api.cash.getBalance();
+      const drawerCash = bal.drawer_cash;
+      const drawerVodafone = bal.drawer_vodafone;
+      const drawerInstapay = bal.drawer_instapay;
+
+      const netProfit = profitData.profit - periodDiscounts.t - periodExpenses.t - periodReturns.t + returnsCost.t - periodSalesDebt.t;
+      const grossProfit = profitData.profit - periodDiscounts.t - periodReturns.t + returnsCost.t;
+
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+      document.getElementById('reportBody').innerHTML = `
+        <tr style="background:var(--bg-hover, #f0f0f0);"><td><strong>📅 التاريخ</strong></td><td><strong>${dateStr}</strong></td></tr>
+        <tr><td>صافي مبيعات الفترة</td><td style="color:var(--success);font-weight:700">${Number(netSales).toLocaleString()}</td></tr>
+        <tr><td>المرتجعات</td><td style="color:var(--danger)">-${Number(periodReturns.t).toLocaleString()}</td></tr>
+        <tr><td>الخصم</td><td style="color:var(--danger)">-${Number(periodDiscounts.t).toLocaleString()}</td></tr>
+        <tr><td>إجمالي المبيعات (قبل الخصم والإرجاع)</td><td style="color:var(--success)">${Number(grossPeriodSales.t).toLocaleString()}</td></tr>
+        <tr><td>تكلفة مبيعات الفترة (صافي)</td><td style="color:var(--danger)">${Number(netCost).toLocaleString()}</td></tr>
+        <tr><td>تكلفة المرتجعات</td><td style="color:var(--danger)">-${Number(returnsCost.t).toLocaleString()}</td></tr>
+        <tr><td>مشتريات الفترة</td><td style="color:var(--danger)">${Number(periodPurchases.t).toLocaleString()}</td></tr>
+        <tr><td>مصروفات الفترة</td><td style="color:var(--danger)">${Number(periodExpenses.t).toLocaleString()}</td></tr>
+        <tr><td>إجمالي المبيعات (كل الفترات)</td><td style="color:var(--blue)">${Number(totalSales.t).toLocaleString()}</td></tr>
+        <tr><td>ربح المبيعات</td><td style="color:var(--success)">${Number(profitData.profit).toLocaleString()}</td></tr>
+        <tr><td><strong>الربح</strong></td><td style="color:${grossProfit>=0?'var(--success)':'var(--danger)'};font-weight:700">${grossProfit.toLocaleString()} ${window.currencySymbol}</td></tr>
+        <tr><td><strong>صافي الربح</strong></td><td style="color:${netProfit>=0?'var(--success)':'var(--danger)'};font-weight:700;font-size:16px">${netProfit.toLocaleString()}</td></tr>
+        <tr><td>عدد المنتجات</td><td>${productsCount.c}</td></tr>
+        <tr><td>المنتجات منخفضة المخزون</td><td style="color:var(--danger)">${lowStockCount.c}</td></tr>
+        <tr><td><strong>💰 رأس المال (المخزون)</strong></td><td style="font-weight:700;color:var(--blue)">${Number(capitalData.total).toLocaleString()} ${window.currencySymbol}</td></tr>
+        <tr><td>عدد العملاء</td><td>${customersCount.c}</td></tr>
+        <tr><td>عدد الموردين</td><td>${suppliersCount.c}</td></tr>
+        <tr><td>💰 رصيد الدرج (نقدي)</td><td style="color:var(--warning);font-weight:700">${drawerCash.toLocaleString()}</td></tr>
+        <tr><td>📱 رصيد الدرج (فودافون كاش)</td><td style="color:#2196F3;font-weight:700">${drawerVodafone.toLocaleString()}</td></tr>
+        <tr><td>💳 رصيد الدرج (انستاباي)</td><td style="color:#4CAF50;font-weight:700">${drawerInstapay.toLocaleString()}</td></tr>
+        <tr><td>⚖️ ديون العملاء (إجمالي)</td><td style="color:var(--danger);font-weight:700">${Number(customerDebt.t + customerDirectDebt.t).toLocaleString()}</td></tr>
+        <tr><td>⚖️ ديون الفترة (غير المحصلة)</td><td style="color:var(--danger)">${Number(periodSalesDebt.t).toLocaleString()}</td></tr>
+        <tr><td>⚖️ ديون الموردين</td><td style="color:var(--blue);font-weight:700">${Number(supplierDebt.t).toLocaleString()}</td></tr>
+      `.trim();
+
+      const purchasesDetail = await window.api.db.all("SELECT pu.*, s.name as supplier_name FROM purchases pu LEFT JOIN suppliers s ON pu.supplier_id = s.id WHERE date(pu.created_at) BETWEEN ? AND ? ORDER BY pu.created_at DESC", [from, to]);
+
+      let purchaseItems = [];
+      if (purchasesDetail.length > 0) {
+        const ids = purchasesDetail.map(p => p.id);
+        const placeholders = ids.map(() => '?').join(',');
+        purchaseItems = await window.api.db.all(
+          `SELECT pi.*, p.name as product_name, p.stock,
+            (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si
+             JOIN sales s ON si.sale_id = s.id
+             WHERE si.product_id = pi.product_id
+             AND date(s.created_at) BETWEEN ? AND ?) as sold_qty
+           FROM purchase_items pi
+           JOIN products p ON pi.product_id = p.id
+           WHERE pi.purchase_id IN (${placeholders})
+           ORDER BY pi.purchase_id, p.name`,
+          [from, to, ...ids]
+        );
+      }
+
+      const itemsByPurchaseId = {};
+      purchaseItems.forEach(item => {
+        if (!itemsByPurchaseId[item.purchase_id]) itemsByPurchaseId[item.purchase_id] = [];
+        itemsByPurchaseId[item.purchase_id].push(item);
+      });
+
+      const dateCard = now.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
+
+      document.getElementById('reportCards').innerHTML = `
+        <div class="card"><h3>📅 ${dateCard}</h3><div class="value" style="font-size:14px">${now.toLocaleDateString('ar-EG', { weekday: 'long' })}</div></div>
+        <div class="card"><h3>صافي المبيعات</h3><div class="value blue">${Number(netSales).toLocaleString()}</div></div>
+        <div class="card"><h3>صافي تكلفة المبيعات</h3><div class="value red">${Number(netCost).toLocaleString()}</div></div>
+        <div class="card"><h3>مصروفات الفترة</h3><div class="value red">${Number(periodExpenses.t).toLocaleString()}</div></div>
+        <div class="card"><h3>الربح</h3><div class="value ${grossProfit>=0?'green':'red'}">${grossProfit.toLocaleString()}</div></div>
+        <div class="card"><h3>صافي الربح</h3><div class="value ${netProfit>=0?'green':'red'}">${netProfit.toLocaleString()}</div></div>
+        <div class="card"><h3>💰 رصيد الدرج (نقدي)</h3><div class="value" style="color:var(--warning)">${drawerCash.toLocaleString()}</div></div>
+        <div class="card"><h3>📱 رصيد الدرج (فودافون)</h3><div class="value" style="color:#2196F3">${drawerVodafone.toLocaleString()}</div></div>
+        <div class="card"><h3>💳 رصيد الدرج (انستاباي)</h3><div class="value" style="color:#4CAF50">${drawerInstapay.toLocaleString()}</div></div>
+        <div class="card"><h3>⚖️ ديون العملاء</h3><div class="value red">${Number(customerDebt.t + customerDirectDebt.t).toLocaleString()}</div></div>
+        <div class="card"><h3>⚖️ ديون الفترة</h3><div class="value red">${Number(periodSalesDebt.t).toLocaleString()}</div></div>
+        <div class="card"><h3>⚖️ ديون الموردين</h3><div class="value blue">${Number(supplierDebt.t).toLocaleString()}</div></div>
+        <div class="card"><h3>المنتجات</h3><div class="value">${productsCount.c}</div></div>
+        <div class="card"><h3>العملاء</h3><div class="value">${customersCount.c}</div></div>
+        <div class="card"><h3>المخزون المنخفض</h3><div class="value red">${lowStockCount.c}</div></div>
+        <div class="card"><h3>💰 رأس المال</h3><div class="value blue">${Number(capitalData.total).toLocaleString()}</div></div>
+      `;
+
+      document.getElementById('purchasesDetailContainer').innerHTML = purchasesDetail.length > 0 ? `
+        <div style="margin-top:16px;">
+          <h3 style="margin-bottom:8px;">📦 تفاصيل المشتريات في الفترة</h3>
+          <div class="table-container">
+            <table>
+              <thead><tr><th>رقم الفاتورة</th><th>المورد</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th><th></th></tr></thead>
+              <tbody>${purchasesDetail.map(p => {
+                const items = itemsByPurchaseId[p.id] || [];
+                return `
+                <tr onclick="togglePurchaseItems(${p.id})" style="cursor:pointer;">
+                  <td>${p.invoice_number}</td>
+                  <td>${p.supplier_name || '-'}</td>
+                  <td style="color:var(--danger)">${Number(p.total_amount).toLocaleString()}</td>
+                  <td>${Number(p.paid_amount).toLocaleString()}</td>
+                  <td style="color:${p.remaining_amount > 0 ? 'var(--danger)' : 'var(--success)'}">${Number(p.remaining_amount).toLocaleString()}</td>
+                  <td>${p.created_at}</td>
+                  <td><span style="font-size:12px;color:var(--primary)">▶ ${items.length} منتج</span></td>
+                </tr>
+                <tr id="purchaseItems_${p.id}" style="display:none;">
+                  <td colspan="7" style="padding:0;">
+                    <table style="width:100%;border-collapse:collapse;">
+                      <thead><tr style="background:var(--bg-hover, #f5f5f5);"><th style="padding:6px 10px;font-size:12px;">المنتج</th><th style="padding:6px 10px;font-size:12px;">سعر الشراء</th><th style="padding:6px 10px;font-size:12px;">الكمية المشتراة</th><th style="padding:6px 10px;font-size:12px;">الكمية المباعة</th><th style="padding:6px 10px;font-size:12px;">المتبقي في المخزون</th></tr></thead>
+                      <tbody>${items.map(item => `
+                        <tr>
+                          <td style="padding:4px 10px;font-size:13px;">${item.product_name}</td>
+                          <td style="padding:4px 10px;font-size:13px;">${Number(item.buy_price).toLocaleString()}</td>
+                          <td style="padding:4px 10px;font-size:13px;">${item.quantity}</td>
+                          <td style="padding:4px 10px;font-size:13px;color:${item.sold_qty > 0 ? 'var(--success)' : 'var(--text-muted)'}">${item.sold_qty}</td>
+                          <td style="padding:4px 10px;font-size:13px;color:${item.stock > (item.quantity * 0.2) ? 'var(--success)' : 'var(--danger)'}">${item.stock}</td>
+                        </tr>`).join('')}</tbody>
+                    </table>
+                  </td>
+                </tr>`}).join('')}</tbody>
+            </table>
+          </div>
+        </div>` : '<div style="margin-top:16px;"><p style="color:var(--text-muted)">📦 لا توجد مشتريات في هذه الفترة</p></div>';
+
+      document.getElementById('topProductsCard').innerHTML = '<h3>أفضل 5 منتجات مبيعاً</h3><table>' +
+        topProducts.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+
+      updateChart('bar',
+        ['صافي المبيعات', 'المرتجعات', 'الخصم', 'صافي التكلفة', 'مشتريات الفترة', 'مصروفات الفترة', 'ديون الفترة', 'الربح', 'صافي الربح'],
+        [netSales, -periodReturns.t, -periodDiscounts.t, -netCost, -periodPurchases.t, -periodExpenses.t, -periodSalesDebt.t, grossProfit, netProfit]
+      );
+    }
+
+    async function loadCategoryReport(from, to) {
+      const catId = document.getElementById('categorySelect').value;
+      if (!catId) { window.showAlert('اختر التصنيف أولاً', 'error'); return; }
+      const cat = await window.api.db.get("SELECT * FROM categories WHERE id=?", [catId]);
+      document.getElementById('reportTitle').textContent = `تقرير التصنيف: ${cat.name} من ${from} إلى ${to}`;
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>البيان</th><th>القيمة</th></tr>';
+
+      const [
+        periodSales, periodDiscounts,
+        periodPurchases, profitData, totalSales,
+        costOfSales, periodReturns, returnsCost, lowStockCount, periodDebt,
+        capitalData
+      ] = await Promise.all([
+        window.api.db.get("SELECT COALESCE(SUM(s.total_amount - s.discount),0) as t FROM (SELECT DISTINCT s.id, s.total_amount, s.discount FROM sales s JOIN sale_items si ON s.id = si.sale_id JOIN products p ON si.product_id = p.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ?) s", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(s.discount),0) as t FROM (SELECT DISTINCT s.id, s.discount FROM sales s JOIN sale_items si ON s.id = si.sale_id JOIN products p ON si.product_id = p.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ?) s", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(pu.total_amount),0) as t FROM (SELECT DISTINCT pu.id, pu.total_amount FROM purchases pu JOIN purchase_items pi ON pu.id = pi.purchase_id JOIN products p ON pi.product_id = p.id WHERE p.category_id = ? AND date(pu.created_at) BETWEEN ? AND ?) pu", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(si.total - (si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price))),0) as profit FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ?", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(s.total_amount - s.discount),0) as t FROM (SELECT DISTINCT s.id, s.total_amount, s.discount FROM sales s JOIN sale_items si ON s.id = si.sale_id JOIN products p ON si.product_id = p.id WHERE p.category_id = ?) s", [catId]),
+        window.api.db.get("SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ?", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(r.amount),0) as t FROM returns r JOIN products p ON r.product_id = p.id WHERE p.category_id = ? AND date(r.created_at) BETWEEN ? AND ? AND (r.type IS NULL OR r.type='sale')", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(r.quantity * COALESCE(p.buy_price, 0)), 0) as t FROM returns r JOIN products p ON r.product_id = p.id WHERE p.category_id = ? AND date(r.created_at) BETWEEN ? AND ? AND (r.type IS NULL OR r.type='sale')", [catId, from, to]),
+        window.api.db.get("SELECT COUNT(*) as c FROM products WHERE category_id = ? AND stock <= min_stock", [catId]),
+        window.api.db.get("SELECT COALESCE(SUM(s.remaining_amount),0) as t FROM (SELECT DISTINCT s.id, s.remaining_amount FROM sales s JOIN sale_items si ON s.id = si.sale_id JOIN products p ON si.product_id = p.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ? AND s.remaining_amount>0) s", [catId, from, to]),
+        window.api.db.get("SELECT COALESCE(SUM(stock * buy_price),0) as total FROM products WHERE category_id = ? AND COALESCE(in_capital,1)=1", [catId])
+      ]);
+
+      const netSales = (periodSales.t || 0) - (periodReturns.t || 0);
+      const netCost = (costOfSales.total || 0) - (returnsCost.t || 0);
+      const netProfit = (profitData.profit || 0) - (periodDiscounts.t || 0) - (periodReturns.t || 0) + (returnsCost.t || 0) - (periodDebt.t || 0);
+      const grossProfit = (profitData.profit || 0) - (periodDiscounts.t || 0) - (periodReturns.t || 0) + (returnsCost.t || 0);
+      const productsCount = await window.api.db.get("SELECT COUNT(*) as c FROM products WHERE category_id=?", [catId]);
+
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+      document.getElementById('reportBody').innerHTML = `
+        <tr style="background:var(--bg-hover, #f0f0f0);"><td><strong>📅 التاريخ</strong></td><td><strong>${dateStr}</strong></td></tr>
+        <tr><td>صافي مبيعات التصنيف</td><td style="color:var(--success);font-weight:700">${Number(netSales).toLocaleString()}</td></tr>
+        <tr><td>المرتجعات</td><td style="color:var(--danger)">-${Number(periodReturns.t||0).toLocaleString()}</td></tr>
+        <tr><td>الخصم</td><td style="color:var(--danger)">-${Number(periodDiscounts.t||0).toLocaleString()}</td></tr>
+        <tr><td>تكلفة المبيعات (صافي)</td><td style="color:var(--danger)">${Number(netCost).toLocaleString()}</td></tr>
+        <tr><td>تكلفة المرتجعات</td><td style="color:var(--danger)">-${Number(returnsCost.t||0).toLocaleString()}</td></tr>
+        <tr><td>مشتريات التصنيف</td><td style="color:var(--danger)">${Number(periodPurchases.t||0).toLocaleString()}</td></tr>
+        <tr><td>ديون التصنيف (غير المحصلة)</td><td style="color:var(--danger)">-${Number(periodDebt.t||0).toLocaleString()}</td></tr>
+        <tr><td>إجمالي مبيعات التصنيف (كل الفترات)</td><td style="color:var(--blue)">${Number(totalSales.t||0).toLocaleString()}</td></tr>
+        <tr><td>ربح المبيعات</td><td style="color:var(--success)">${Number(profitData.profit||0).toLocaleString()}</td></tr>
+        <tr><td><strong>الربح</strong></td><td style="color:${grossProfit>=0?'var(--success)':'var(--danger)'};font-weight:700">${grossProfit.toLocaleString()} ${window.currencySymbol}</td></tr>
+        <tr><td><strong>صافي الربح</strong></td><td style="color:${netProfit>=0?'var(--success)':'var(--danger)'};font-weight:700;font-size:16px">${netProfit.toLocaleString()}</td></tr>
+        <tr><td><strong>💰 رأس المال (المخزون)</strong></td><td style="font-weight:700;color:var(--blue)">${Number(capitalData.total||0).toLocaleString()} ${window.currencySymbol}</td></tr>
+        <tr><td>عدد المنتجات في التصنيف</td><td>${productsCount.c}</td></tr>
+        <tr><td>منتجات منخفضة المخزون</td><td style="color:var(--danger)">${lowStockCount.c}</td></tr>
+      `.trim();
+
+      document.getElementById('reportCards').innerHTML = `
+        <div class="card"><h3>🏷️ ${cat.name}</h3><div class="value" style="font-size:14px">${dateStr}</div></div>
+        <div class="card"><h3>صافي المبيعات</h3><div class="value blue">${Number(netSales).toLocaleString()}</div></div>
+        <div class="card"><h3>صافي التكلفة</h3><div class="value red">${Number(netCost).toLocaleString()}</div></div>
+        <div class="card"><h3>⚖️ ديون التصنيف</h3><div class="value red">${Number(periodDebt.t||0).toLocaleString()}</div></div>
+        <div class="card"><h3>الربح</h3><div class="value ${grossProfit>=0?'green':'red'}">${grossProfit.toLocaleString()}</div></div>
+        <div class="card"><h3>صافي الربح</h3><div class="value ${netProfit>=0?'green':'red'}">${netProfit.toLocaleString()}</div></div>
+        <div class="card"><h3>💰 رأس المال</h3><div class="value blue">${Number(capitalData.total||0).toLocaleString()}</div></div>
+        <div class="card"><h3>المنتجات</h3><div class="value">${productsCount.c}</div></div>
+        <div class="card"><h3>المخزون المنخفض</h3><div class="value red">${lowStockCount.c}</div></div>
+      `;
+
+      document.getElementById('topProductsCard').innerHTML = '<h3>أفضل منتجات التصنيف مبيعاً</h3>' +
+        await loadCategoryTopProducts(catId, from, to);
+
+      updateChart('bar', ['صافي المبيعات', 'المرتجعات', 'الخصم', 'صافي التكلفة', 'مشتريات التصنيف', 'ديون التصنيف', 'صافي الربح'],
+        [netSales, -(periodReturns.t||0), -(periodDiscounts.t||0), -netCost, -(periodPurchases.t||0), -(periodDebt.t||0), netProfit]);
+    }
+
+    async function loadCategoryTopProducts(catId, from, to) {
+      const top = await window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ? GROUP BY si.product_id ORDER BY qty DESC LIMIT 5", [catId, from, to]);
+      if (top.length === 0) return '<p style="color:var(--text-muted)">لا توجد مبيعات</p>';
+      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+    }
+
+    async function loadDebtsReport() {
+      document.getElementById('reportTitle').textContent = 'تقرير الديون';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>النوع</th><th>الاسم</th><th>رقم الفاتورة</th><th>المبلغ الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th></tr>';
+
+      const [sales, directDebts, purchases] = await Promise.all([
+        window.api.db.all("SELECT s.*, c.name as cust_name FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE s.remaining_amount > 0 ORDER BY s.created_at DESC"),
+        window.api.db.all("SELECT cde.*, c.name as cust_name FROM customer_debt_entries cde LEFT JOIN customers c ON cde.customer_id = c.id WHERE cde.amount > 0 ORDER BY cde.created_at DESC"),
+        window.api.db.all("SELECT pu.*, su.name as sup_name FROM purchases pu LEFT JOIN suppliers su ON pu.supplier_id = su.id WHERE pu.remaining_amount > 0 ORDER BY pu.created_at DESC")
+      ]);
+
+      const rows = [
+        ...sales.map(s => `<tr><td style="color:var(--danger);font-weight:700">عميل</td><td>${s.cust_name || 'نقدي'}</td><td>${s.invoice_number}</td><td>${Number(s.total_amount).toLocaleString()}</td><td>${Number(s.paid_amount).toLocaleString()}</td><td style="color:var(--danger);font-weight:700">${Number(s.remaining_amount).toLocaleString()}</td><td>${s.created_at}</td></tr>`),
+        ...directDebts.map(d => `<tr><td style="color:var(--danger);font-weight:700">عميل</td><td>${d.cust_name || '-'}</td><td>دين مباشر</td><td>-</td><td>-</td><td style="color:var(--danger);font-weight:700">${Number(d.amount).toLocaleString()}</td><td>${d.description || '-'}</td></tr>`),
+        ...purchases.map(p => `<tr><td style="color:var(--primary);font-weight:700">مورد</td><td>${p.sup_name || '-'}</td><td>${p.invoice_number}</td><td>${Number(p.total_amount).toLocaleString()}</td><td>${Number(p.paid_amount).toLocaleString()}</td><td style="color:var(--primary);font-weight:700">${Number(p.remaining_amount).toLocaleString()}</td><td>${p.created_at}</td></tr>`)
+      ];
+
+      document.getElementById('reportBody').innerHTML = rows.join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">لا توجد ديون مستحقة</td></tr>';
+
+      const totalCustomerDebt = sales.reduce((s, x) => s + x.remaining_amount, 0) + directDebts.reduce((s, x) => s + x.amount, 0);
+      const totalSupplierDebt = purchases.reduce((s, x) => s + x.remaining_amount, 0);
+
+      document.getElementById('reportCards').innerHTML = `
+        <div class="card"><h3>ديون العملاء</h3><div class="value red">${totalCustomerDebt.toLocaleString()}</div></div>
+        <div class="card"><h3>عدد فواتير العملاء</h3><div class="value">${sales.length}</div></div>
+        <div class="card"><h3>ديون الموردين</h3><div class="value blue">${totalSupplierDebt.toLocaleString()}</div></div>
+        <div class="card"><h3>عدد فواتير الموردين</h3><div class="value">${purchases.length}</div></div>
+        <div class="card"><h3>صافي الديون</h3><div class="value ${totalCustomerDebt-totalSupplierDebt>=0?'red':'blue'}">${(totalCustomerDebt-totalSupplierDebt).toLocaleString()}</div></div>
+      `;
+
+      updateChart('doughnut', ['ديون العملاء', 'ديون الموردين'], [totalCustomerDebt, totalSupplierDebt]);
+    }
+
+    function updateChart(type, labels, data) {
+      if (chart) chart.destroy();
+      const ctx = document.getElementById('reportChart').getContext('2d');
+      const values = Array.isArray(data) ? data : Object.values(data);
+      chart = new Chart(ctx, {
+        type,
+        data: { labels: Array.isArray(labels) ? labels : Object.keys(data), datasets: [{ label: 'القيمة', data: values, backgroundColor: ['#1a73e8', '#0f9d58', '#d93025', '#f9ab00', '#9334e6', '#e67300'] }] },
+        options: { responsive: true, plugins: { legend: { display: type === 'pie' || type === 'doughnut', position: 'bottom' } } }
+      });
+    }
+
+    function exportPDF() {
+      const title = document.getElementById('reportTitle').textContent;
+      const headers = document.getElementById('reportHeaders');
+      const body = document.getElementById('reportBody');
+      const shopName = localStorage.getItem('shopName') || 'نظام الكاشير';
+
+      let html = `<html dir="rtl"><head><meta charset="UTF-8"><title>${title}</title>
+      <style>
+        body{font-family:sans-serif;margin:20px;color:#333;}
+        h1{text-align:center;font-size:20px;margin-bottom:4px;}
+        h2{text-align:center;font-size:15px;color:#666;margin-bottom:20px;font-weight:400;}
+        table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+        th{background:#1a73e8;color:#fff;padding:8px;text-align:center;}
+        td{padding:6px 8px;text-align:center;border-bottom:1px solid #ddd;}
+        .print-btn{display:block;width:200px;margin:20px auto;padding:10px;background:#1a73e8;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;}
+        @media print{.print-btn{display:none;}}
+        .footer{text-align:center;font-size:11px;color:#999;margin-top:30px;border-top:1px solid #eee;padding-top:10px;}
+      </style></head><body>
+      <h1>${shopName}</h1>
+      <h2>${title}</h2>
+      <table><thead>${headers.innerHTML}</thead><tbody>${body.innerHTML}</tbody></table>
+      <button class="print-btn" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
+      <div class="footer">تم الإنشاء في: ${new Date().toLocaleString('ar-EG')}</div>
+      </body></html>`;
+
+      const win = window.open('', '_blank', 'width=900,height=650');
+      win.document.write(html);
+      win.document.close();
+    }
+
+    // Set default dates
+    const today = new Date().toISOString().split('T')[0];
+    const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    document.getElementById('dateFrom').value = firstOfMonth;
+    document.getElementById('dateTo').value = today;
+    populateDaySelect();
+    (async () => {
+      const cats = await window.api.db.all("SELECT * FROM categories ORDER BY name");
+      document.getElementById('categorySelect').innerHTML = '<option value="">اختر التصنيف</option>' + cats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      const prods = await window.api.db.all("SELECT id, name FROM products ORDER BY name");
+      document.getElementById('productSelect').innerHTML = '<option value="">كل المنتجات</option>' + prods.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    })();
+    loadReport();
+
+  </script>
+  <script src="../js/sidebar.js"></script>
+</body>
+</html>
