@@ -33,7 +33,11 @@ jobs:
         run: npm ci
 
       - name: Build (zip + nsis installer)
-        run: npx electron-builder --win --x64
+        # --publish never: on CI, electron-builder tries to auto-publish a GitHub
+        # release and aborts with "GitHub Personal Access Token is not set" even
+        # though the .exe and .zip were built fine. The release step at the bottom
+        # of this job does that job instead, using the automatic GITHUB_TOKEN.
+        run: npx electron-builder --win --x64 --publish never
         env:
           # no signing certificate in this repo; drop these to sign the exe
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

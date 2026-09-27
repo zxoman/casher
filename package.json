@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build:win": "electron-builder --win --x64",
-    "build:linux": "electron-builder --linux --x64"
+    "build:win": "electron-builder --win --x64 --publish never",
+    "build:linux": "electron-builder --linux --x64 --publish never"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -67,5 +67,13 @@
       "createDesktopShortcut": true,
       "shortcutName": "نظام الكاشير"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zxoman/casher.git"
+  },
+  "homepage": "https://github.com/zxoman/casher",
+  "author": {
+    "name": "zxoman"
   }
 }
