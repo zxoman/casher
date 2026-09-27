@@ -161,7 +161,7 @@
       try {
         // The main process writes the row and moves the money in one
         // transaction, so there is no half-saved expense any more.
-        const res = await window.api.saveExpense(payload);
+        const res = await window.api.ops.saveExpense(payload);
         if (!id) await window.api.telegram.sendNotification('expense', { description: desc, amount });
         closeModal('expenseModal');
         reload();
@@ -177,7 +177,7 @@
       if (!await window.showConfirm('هل أنت متأكد؟')) return;
       try {
         // Returns the money the expense took, in the same transaction.
-        await window.api.deleteExpense(id);
+        await window.api.ops.deleteExpense(id);
         reload();
       } catch (err) {
         window.showAlert(err.message || 'حصلت مشكلة', 'error');
