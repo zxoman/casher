@@ -67,11 +67,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $asar = 'dist/win-unpacked/resources/app.asar'
           if (-not (Test-Path $asar)) { throw "app.asar is missing" }
-          # Read the asar through @electron/asar (already present as an
-          # electron-builder dependency). `npx asar list` is not usable here:
-          # there is no `asar` bin in this project, so it printed nothing and
-          # every check below failed.
-          node -e 'const a=require("@electron/asar");const l=a.listPackage("dist/win-unpacked/resources/app.asar");const w=["/main.js","/preload.js","/package.json","/src/js/database.js","/src/js/pager.js","/src/js/sidebar.js","/src/pages/invoices.html","/src/pages/products.html","/src/pages/cash.html","/src/pages/pos.html"];const m=w.filter(function(f){return l.indexOf(f)<0});if(m.length){console.error("NOT IN ASAR: "+m.join(", "));process.exit(1)}console.log("asar contents OK ("+l.length+" entries)")'
+          # Read the asar through @electron/asar (present as an electron-builder
+          # dependency). `npx asar list` is not usable here: there is no `asar`
+          # bin in this project, so it printed nothing and every check failed.
+          # Paths are normalised because the archive lists them with the host
+          # separator, i.e. \main.js on the Windows runner and /main.js on Linux.
+          node -e 'const a=require("@electron/asar");const raw=a.listPackage("dist/win-unpacked/resources/app.asar");const norm=raw.map(function(x){return String(x).replace(/\\/g,"/").replace(/^\/+/,"")});const w=["main.js","preload.js","package.json","src/js/database.js","src/js/pager.js","src/js/sidebar.js","src/pages/invoices.html","src/pages/products.html","src/pages/cash.html","src/pages/pos.html"];if(!norm.length){console.error("asar list came back EMPTY; first raw entries: "+JSON.stringify(raw.slice(0,5)));process.exit(1)}const m=w.filter(function(f){return norm.indexOf(f)<0});if(m.length){console.error("NOT IN ASAR ("+m.length+"): "+m.join(", "));console.error("sample entries: "+JSON.stringify(norm.slice(0,5)));process.exit(1)}console.log("asar contents OK ("+norm.length+" entries)")'
           if ($LASTEXITCODE -ne 0) { throw "asar content check failed" }
 
       - name: Upload Windows build
