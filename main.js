@@ -570,6 +570,100 @@ ipcMain.handle('cash-addTreasuryEntry', (_, amount, reason, referenceId) => {
   return { success: true, balance: out.balance, id: out.id };
 });
 
+// --- POS sale ---
+// Taking cash in a drawer is what selling IS, so pos.a alone authorises this.
+// The renderer used to write the sale, its lines and the stock moves through
+// window.api.db, then call cash.addDrawerEntry for the payment - and that last
+// call asked for cash.drawer on top of pos.a. A cashier with sell rights
+// therefore could not take cash at all, and because the drawer entry came
+// last, the rejection left a committed sale whose money was never in the
+// drawer. The whole thing is one transaction now: the sale, the stock
+// movement and the drawer entries either all land or none of them do.
+ipcMain.handle('pos-create-sale', (_, payload) => {
+  const u = requirePerm('pos', 'a');
+  const p = payload || {};
+  const raw = Array.isArray(p.items) ? p.items : [];
+  if (!raw.length) throw new Error('السلة فارغة');
+
+  // Composition is read from the database rather than taken from the cart, so
+  // a crafted renderer cannot claim a container is not linked to its unit.
+  const containers = new Map();
+  for (const l of db.all('SELECT container_id, unit_id, units_per_container FROM product_compositions')) {
+    containers.set(l.container_id, { unitId: l.unit_id, unitsPerContainer: Number(l.units_per_container) || 1 });
+  }
+
+  const lines = raw.map((it) => {
+    const productId = parseInt(it && it.productId, 10);
+    const qty = Number(it && it.qty);
+    const price = Number(it && it.price);
+    if (!Number.isInteger(productId) || productId <= 0) throw new Error('صنف غير صالح في السلة');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('كمية غير صالحة');
+    if (!Number.isFinite(price) || price < 0) throw new Error('سعر غير صالح');
+    if (!db.get('SELECT id FROM products WHERE id = ?', [productId])) throw new Error('منتج غير موجود في السلة');
+    return { productId, qty, price, buyPrice: Number(it.buyPrice) || 0, originalPrice: Number(it.originalPrice) || price };
+  });
+
+  // The money fields are recomputed from the lines so a renderer cannot post a
+  // paid_amount that does not match the drawer entries it asks for.
+  const total = lines.reduce((s, l) => s + l.qty * l.price, 0);
+  const discount = Math.min(Math.max(Number(p.discount) || 0, 0), total);
+  const afterDiscount = Math.max(0, total - discount);
+
+  const DRAWER_BY_METHOD = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+  const breakdown = {};
+  const given = (p.breakdown && typeof p.breakdown === 'object') ? p.breakdown : {};
+  for (const [k, v] of Object.entries(given)) {
+    const amount = Number(v);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const drawerType = DRAWER_BY_METHOD[k] || k;
+    if (!DRAWER_TYPES.includes(drawerType)) throw new Error('طريقة دفع غير معروفة: ' + k);
+    breakdown[k] = amount;
+  }
+  const paid = Math.min(Object.values(breakdown).reduce((s, v) => s + v, 0), afterDiscount);
+  const remaining = Math.max(0, afterDiscount - paid);
+  const method = Object.keys(breakdown).length
+    ? Object.entries(breakdown).reduce((a, b) => (a[1] > b[1] ? a : b))[0]
+    : 'cash';
+
+  const out = db.transaction(() => {
+    const row = db.get('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM sales');
+    const nextId = (row && row.nextId) || 1;
+    const invoiceNum = 'INV-' + String(nextId).padStart(5, '0');
+
+    const saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(p.saleDate || '')) ? p.saleDate : new Date().toISOString().split('T')[0];
+    const customerId = parseInt(p.customerId, 10) || null;
+    if (customerId && !db.get('SELECT id FROM customers WHERE id = ?', [customerId])) {
+      throw new Error('العميل غير موجود');
+    }
+    const sale = db.run(
+      'INSERT INTO sales (invoice_number, customer_id, user_id, total_amount, discount, paid_amount, remaining_amount, payment_method, payment_breakdown, sale_date) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [invoiceNum, customerId, u.id, total, discount, paid, remaining, method, JSON.stringify(breakdown), saleDate]
+    );
+
+    for (const l of lines) {
+      db.run('INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?,?,?,?,?,?,?)',
+        [sale.lastInsertRowid, l.productId, l.qty, l.price, l.qty * l.price, l.buyPrice, l.originalPrice]);
+      const link = containers.get(l.productId);
+      // A container is stocked by its unit, so the unit is what moves.
+      if (link) db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [l.qty * link.unitsPerContainer, link.unitId]);
+      else db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [l.qty, l.productId]);
+    }
+    // Container stock is a reading of the unit stock, not an independent count.
+    for (const [containerId, link] of containers) {
+      const unit = db.get('SELECT stock FROM products WHERE id = ?', [link.unitId]);
+      db.run('UPDATE products SET stock = ? WHERE id = ?',
+        [Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer), containerId]);
+    }
+
+    for (const [k, v] of Object.entries(breakdown)) {
+      recordDrawer(u.id, DRAWER_BY_METHOD[k] || k, v, 'فاتورة ' + invoiceNum);
+    }
+    db.auditLog(u.id, 'بيع', `${invoiceNum}: ${afterDiscount} (مدفوع ${paid})`);
+    return { success: true, saleId: sale.lastInsertRowid, invoiceNum, barcode: String(nextId), total, discount, afterDiscount, paid, remaining, method, breakdown };
+  });
+  return out;
+});
+
 // ====== Named operations for the extra (non-CRUD) permissions ======
 // These own tables that TABLE_PERMS refuses to expose to raw SQL, so the extra
 // permission is the only thing that can authorise them.

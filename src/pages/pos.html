@@ -179,15 +179,6 @@
       }
     }
 
-    async function syncPosContainerStocks() {
-      for (const cid of Object.keys(containerLinks)) {
-        const link = containerLinks[cid];
-        const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [link.unitId]);
-        const derived = Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer);
-        await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, cid]);
-      }
-    }
-
     async function loadPromotions() {
       individualPromos = {};
       packagePromos = [];
@@ -671,39 +662,26 @@
 
       const customerName = customerId ? (window.posCustomers || []).find(c => c.id == customerId)?.name : null;
 
-      const result = await window.api.db.get('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM sales');
-      const nextId = result?.nextId || 1;
-      const seq = String(nextId).padStart(5, '0');
-      const invoiceNum = 'INV-' + seq;
-      const barcode = String(nextId);
-
       const paidForDb = Math.min(totalPaid, afterDiscount);
       const saleDate = document.getElementById('invoiceDate').value || new Date().toISOString().split('T')[0];
-      const saleResult = await window.api.db.run(
-        'INSERT INTO sales (invoice_number, customer_id, user_id, total_amount, discount, paid_amount, remaining_amount, payment_method, payment_breakdown, sale_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [invoiceNum, customerId, user.id, total, totalDiscount, paidForDb, remaining, method, JSON.stringify(breakdown), saleDate]
-      );
-
-      for (const item of cart) {
-        await window.api.db.run(
-          'INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [saleResult.lastInsertRowid, item.id, item.qty, item.price, item.qty * item.price, item.buy_price || 0, item.original_price || item.price]
-        );
-        const link = containerLinks[item.id];
-        if (link) {
-          await window.api.db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [item.qty * link.unitsPerContainer, link.unitId]);
-        } else {
-          await window.api.db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [item.qty, item.id]);
-        }
-      }
-      await syncPosContainerStocks();
-
-      const dtMap = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
-      for (const [k, v] of Object.entries(breakdown)) {
-        if (v > 0) {
-          await window.api.cash.addDrawerEntry(dtMap[k] || k, v, `فاتورة ${invoiceNum}`);
-        }
-      }
+      // One call, one transaction. The main process writes the sale, its lines,
+      // the stock movement and the drawer entries together, and it is the one
+      // that decides the invoice number and the amounts.
+      const saleResult = await window.api.ops.createSale({
+        customerId,
+        discount: totalDiscount,
+        breakdown,
+        saleDate,
+        items: cart.map(x => ({
+          productId: x.id,
+          qty: x.qty,
+          price: x.price,
+          buyPrice: x.buy_price || 0,
+          originalPrice: x.original_price || x.price,
+        })),
+      });
+      const invoiceNum = saleResult.invoiceNum;
+      const barcode = saleResult.barcode;
 
       const details = cart.map(x => `${x.name} x${x.qty}`).join(', ');
       const methodLabels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
