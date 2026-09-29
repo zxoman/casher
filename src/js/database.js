@@ -14,6 +14,16 @@ function initialize(dbDir) {
 
   createTables();
   seedDefaults();
+  try {
+    const fix = reconcileSalesDrawerEntries();
+    if (fix.repaired) {
+      console.log(`[db] reconciled drawer entries for ${fix.repaired} sale(s)`);
+    }
+  } catch (e) {
+    // A repair failure must never stop the app from opening. The sale data is
+    // untouched either way, so the worst case is a drawer that is still short.
+    console.error('[db] drawer reconciliation failed:', e.message);
+  }
 }
 
 function createTables() {
@@ -379,6 +389,68 @@ function createTables() {
       }
     }
   } catch(e) {}
+}
+
+// Re-creates the drawer rows that a cashier sale never got.
+//
+// The bug: the old POS wrote the sale, its items and the stock decrement with
+// one IPC call each, then asked for the drawer entry. That last call asked for
+// the cash.drawer permission, a cashier did not have it, it threw, and the
+// exception was raised *after* the sale had already been committed. Result:
+// the invoice and the stock move exist, the money never reached the drawer.
+//
+// Only sales that are provably missing are touched. "Provably" means the sale
+// carries a positive payment amount and no drawer row exists for it, checked
+// both against the new structured reference (sale:<id>) and against the old
+// free-text reason ("فاتورة <invoice number>") so historical rows are never
+// double counted. Anything ambiguous is left alone for a human to look at.
+//
+// Idempotent: on the next open the repaired rows match the reference and no
+// further rows are added.
+function reconcileSalesDrawerEntries() {
+  const byMethod = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
+  const sales = db.prepare(`
+    SELECT id, invoice_number, user_id, paid_amount, payment_method, payment_breakdown
+    FROM sales WHERE paid_amount > 0
+  `).all();
+  if (!sales.length) return { repaired: 0, skipped: 0 };
+
+  const existingRef = db.prepare("SELECT id FROM drawer_log WHERE reference_id = ? LIMIT 1");
+  const existingReason = db.prepare("SELECT id FROM drawer_log WHERE reason = ? AND reference_id IS NULL LIMIT 1");
+  const balanceOf = db.prepare("SELECT balance FROM drawer_log WHERE drawer_type = ? ORDER BY id DESC LIMIT 1");
+
+  let repaired = 0, skipped = 0;
+  for (const sale of sales) {
+    // Already reconciled on an earlier start, or it carried a row all along.
+    if (existingRef.get('sale:' + sale.id)) continue;
+    if (existingReason.get('فاتورة ' + sale.invoice_number)) continue;
+
+    let parts = [];
+    try { parts = JSON.parse(sale.payment_breakdown || '{}'); } catch (e) { parts = {}; }
+    let moves = Object.entries(parts)
+      .filter(([, v]) => Number(v) > 0)
+      .map(([k, v]) => [byMethod[k] || k, Number(v)]);
+    // A sale with no usable breakdown still moved cash if it was paid in cash.
+    if (!moves.length && sale.payment_method === 'cash' && sale.paid_amount > 0) {
+      moves = [['نقدي', Number(sale.paid_amount)]];
+    }
+    if (!moves.length) { skipped++; continue; }
+
+    // The cashier who rang the sale is the one who took the money, so the repair
+    // is attributed to them rather than to whoever happens to be logged in now.
+    for (const [drawerType, amount] of moves) {
+      const prev = balanceOf.get(drawerType);
+      const balance = (prev ? Number(prev.balance) : 0) + amount;
+      db.prepare("INSERT INTO drawer_log (drawer_type, amount, balance, reason, reference_id, user_id) VALUES (?,?,?,?,?,?)")
+        .run(drawerType, amount, balance, 'فاتورة ' + sale.invoice_number, 'sale:' + sale.id, sale.user_id);
+    }
+    try {
+      db.prepare("INSERT INTO audit_log (user_id, action, details) VALUES (?,?,?)")
+        .run(sale.user_id, 'إصلاح مرتجع درج', `فاتورة ${sale.invoice_number}: استرجاع ${sale.paid_amount} للدرج (فاتورة مسجلة بدون حركة درج)`);
+    } catch (e) {}
+    repaired++;
+  }
+  return { repaired, skipped };
 }
 
 function seedDefaults() {

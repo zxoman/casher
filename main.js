@@ -655,8 +655,10 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
         [Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer), containerId]);
     }
 
+    // The structured reference is what lets reconcileSalesDrawerEntries() prove
+    // a sale is missing its drawer row instead of matching on the reason text.
     for (const [k, v] of Object.entries(breakdown)) {
-      recordDrawer(u.id, DRAWER_BY_METHOD[k] || k, v, 'فاتورة ' + invoiceNum);
+      recordDrawer(u.id, DRAWER_BY_METHOD[k] || k, v, 'فاتورة ' + invoiceNum, 'sale:' + sale.lastInsertRowid);
     }
     db.auditLog(u.id, 'بيع', `${invoiceNum}: ${afterDiscount} (مدفوع ${paid})`);
     return { success: true, saleId: sale.lastInsertRowid, invoiceNum, barcode: String(nextId), total, discount, afterDiscount, paid, remaining, method, breakdown };
