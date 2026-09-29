@@ -26,6 +26,7 @@
         <div style="display:flex;gap:8px;">
           <button class="btn btn-sm btn-warning" id="addReturnBtn" onclick="showReturnModal()" style="${window.can('returns','a')?'':'display:none'}">↩️ إرجاع مبيعات</button>
           <button class="btn btn-sm btn-info" id="addPurchaseReturnBtn" onclick="showPurchaseReturnModal()" style="${window.can('returns','a')?'':'display:none'}">📥 إرجاع مشتريات</button>
+          <button class="btn btn-sm" onclick="showQuickReturnModal()" style="${window.can('returns','a')?'':'display:none'}">⚡ رجّع بدون فاتورة</button>
           <button class="btn btn-sm" onclick="window.print()">🖨️ طباعة الصفحة</button>
         </div>
       </div>
@@ -199,7 +200,7 @@
         return `<tr style="cursor:pointer;" onclick="toggleReturnDetail(${d.id})">
             <td style="text-align:center;" id="arrow-${d.id}">▸</td>
             <td><b>${esc(d.return_number) || '-'}</b></td>
-            <td>${esc(d.source_invoice) || '-'}</td>
+            <td>${esc(d.source_invoice) || '<span style="color:var(--text-secondary);font-style:italic;">بدون فاتورة</span>'}</td>
             <td>${typeLabel}</td>
             <td>${items.length} صنف (${qty} قطعة)</td>
             <td style="color:var(--danger);font-weight:700;">${Number(d.total).toLocaleString()}</td>
@@ -297,10 +298,46 @@
       }
     }
 
-    function addScannedSaleProduct(p, input) {
-      if (!currentSaleId) { window.showAlert('امسح فاتورة البيع الأول', 'error'); return; }
-      const item = saleInvoiceItems.find(i => i.product_id === p.id);
-      if (!item) { window.showAlert(`"${p.name}" مش في فاتورة ${currentSaleInvoice}`, 'error'); return; }
+    // Finds the most recent sale that still owes this product a return, so the
+    // cashier can just scan the item instead of typing the invoice number first.
+    // A sale return is always tied to a sale row (the quantity check is per
+    // invoice), so the invoice is resolved here rather than asked for.
+    async function findInvoiceForProduct(productId) {
+      return await window.api.db.get(`
+        SELECT s.id, s.invoice_number, s.customer_id, s.total_amount, s.paid_amount, s.remaining_amount
+        FROM sales s
+        JOIN sale_items si ON si.sale_id = s.id
+        WHERE si.product_id = ?
+          AND si.quantity > COALESCE((
+            SELECT SUM(r.quantity) FROM returns r
+            WHERE (r.type='sale' OR r.type IS NULL) AND r.sale_id = s.id AND r.product_id = si.product_id
+          ), 0)
+        ORDER BY s.id DESC
+        LIMIT 1`, [productId]);
+    }
+
+    // Adds a scanned product to the return. With no invoice loaded (or when the
+    // product is not on the loaded one) it loads the latest sale that has it and
+    // carries on, instead of stopping and asking for an invoice number.
+    async function addScannedSaleProduct(p, input) {
+      let item = currentSaleId ? saleInvoiceItems.find(i => i.product_id === p.id) : null;
+      if (!item) {
+        const sale = await findInvoiceForProduct(p.id);
+        if (!sale) { window.showAlert(`"${p.name}" مفيش فاتورة بيع لسه فيها، أو رجع بالكامل`, 'error'); return; }
+        if (!currentSaleId || currentSaleId !== sale.id) {
+          // Switching the loaded invoice would drop anything already picked, so
+          // the user is told rather than silently losing the basket.
+          if (selectedSaleReturns.length) {
+            window.showAlert(
+              `الفاتورة المحمّلة ${currentSaleInvoice || ''} مش فيها "${p.name}".<br>` +
+              `فيه فاتورة تانية فيها الصنف. لازم تبدأ فاتورة جديدة.`, 'error');
+            return;
+          }
+          await loadSaleInvoice(sale);
+        }
+        item = saleInvoiceItems.find(i => i.product_id === p.id);
+      }
+      if (!item) { window.showAlert(`"${p.name}" مش في الفاتورة`, 'error'); return; }
       const available = (item.inv_qty || 0) - (item.returned || 0);
       if (available <= 0) { window.showAlert(`"${p.name}" اترجع بالكامل من الفاتورة (${item.returned}/${item.inv_qty})`, 'error'); return; }
       addSaleReturnItem(p.id, available, item.price);
@@ -764,6 +801,134 @@
       loadReturns();
     }
 
+    // ====== Quick return: no source invoice ======
+    // The cashier scans the goods, types how many, and says where the money
+    // goes. There is no sale to settle against, so a customer debt cannot be
+    // reduced here (the server refuses that); the stock is credited either way.
+    let quickReturnItems = [];
+
+    function showQuickReturnModal() {
+      quickReturnItems = [];
+      document.getElementById('quickProductSearch').value = '';
+      document.getElementById('quickProductResults').style.display = 'none';
+      document.getElementById('quickProductResults').innerHTML = '';
+      document.getElementById('quickDestination').value = 'drawer';
+      renderQuickItems();
+      updateQuickHint();
+      document.getElementById('quickReturnModal').style.display = 'flex';
+      setTimeout(() => document.getElementById('quickProductSearch').focus(), 100);
+    }
+
+    function updateQuickHint() {
+      const d = document.getElementById('quickDestination').value;
+      const hint = document.getElementById('quickDestHint');
+      hint.textContent = d === 'none'
+        ? 'المخزون هيرجع بس — مافيش فلوس هتتحرك من الدرج ولا الخزينة.'
+        : (d === 'drawer' ? 'هتصرف من رصيد الدرج النقدي.' : 'هتصرف من رصيد الخزينة.');
+    }
+
+    function quickSearchProducts(q) {
+      const box = document.getElementById('quickProductResults');
+      const ql = String(q || '').trim().toLowerCase();
+      if (ql.length < 1) { box.style.display = 'none'; box.innerHTML = ''; return; }
+      // Exact barcode wins outright, the way a scanner expects.
+      const exact = allProducts.filter(p => p.barcode && String(p.barcode).toLowerCase() === ql);
+      const rest = exact.length ? [] : allProducts.filter(p =>
+        (p.name || '').toLowerCase().includes(ql) || (p.barcode && String(p.barcode).toLowerCase().includes(ql)));
+      const list = (exact.length ? exact : rest).slice(0, 40);
+      if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+      box.style.display = 'block';
+      box.innerHTML = list.map(p => `<div style="padding:6px 9px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
+          onmousedown="quickPickProduct(${p.id})">
+          ${esc(p.name)} <span style="color:var(--text-secondary);font-size:11px;">| باركود ${esc(p.barcode) || '-'} | رصيد ${p.stock}</span>
+        </div>`).join('');
+    }
+
+    function quickPickProduct(id) {
+      const p = allProducts.find(x => x.id === id);
+      if (!p) return;
+      const existing = quickReturnItems.find(i => i.productId === id);
+      if (existing) { existing.qty += 1; }
+      else {
+        // Price defaults to the selling price; the cashier can change it per
+        // line if the item was actually sold at something else.
+        quickReturnItems.push({
+          productId: id, name: p.name, qty: 1,
+          price: Number(p.sell_price) || Number(p.wholesale_price) || 0
+        });
+      }
+      document.getElementById('quickProductSearch').value = '';
+      document.getElementById('quickProductResults').style.display = 'none';
+      renderQuickItems();
+      document.getElementById('quickProductSearch').focus();
+    }
+
+    function renderQuickItems() {
+      const box = document.getElementById('quickItemsBox');
+      if (!quickReturnItems.length) {
+        box.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-secondary);font-size:13px;">امسح منتج لإضافته</div>';
+      } else {
+        box.innerHTML = quickReturnItems.map((it, idx) => `
+          <div style="display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--border);">
+            <div style="flex:1;font-size:13px;">${esc(it.name)}</div>
+            <input type="number" min="1" step="1" value="${it.qty}" class="form-input" style="width:66px;"
+                   oninput="quickSetQty(${idx}, this.value)">
+            <input type="number" min="0" step="0.01" value="${it.price}" class="form-input" style="width:86px;"
+                   oninput="quickSetPrice(${idx}, this.value)">
+            <div style="width:84px;text-align:left;font-weight:700;color:var(--danger);" id="quickLine-${idx}">${(it.qty * it.price).toLocaleString()}</div>
+            <button class="btn btn-sm btn-danger" onclick="quickRemove(${idx})">✕</button>
+          </div>`).join('');
+      }
+      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+    }
+
+    function quickSetQty(idx, v) {
+      const q = parseInt(v, 10);
+      if (!Number.isInteger(q) || q <= 0) { quickReturnItems.splice(idx, 1); renderQuickItems(); return; }
+      quickReturnItems[idx].qty = q;
+      const el = document.getElementById('quickLine-' + idx);
+      if (el) el.textContent = (q * quickReturnItems[idx].price).toLocaleString();
+      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+    }
+    function quickSetPrice(idx, v) {
+      const p = Number(v);
+      if (!Number.isFinite(p) || p < 0) return;
+      quickReturnItems[idx].price = p;
+      const el = document.getElementById('quickLine-' + idx);
+      if (el) el.textContent = (quickReturnItems[idx].qty * p).toLocaleString();
+      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+    }
+    function quickRemove(idx) { quickReturnItems.splice(idx, 1); renderQuickItems(); }
+
+    async function submitQuickReturn() {
+      if (!quickReturnItems.length) { window.showAlert('امسح منتج واحد على الأقل', 'error'); return; }
+      const dest = document.getElementById('quickDestination').value;
+      const total = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0);
+      if (dest !== 'none' && total > 0) {
+        const pool = dest === 'drawer' ? 'الدرج' : 'الخزينة';
+        if (!await window.showConfirm(`هتصرف ${total.toLocaleString()} من ${pool} كاش للعميل. متابعة؟`)) return;
+      }
+      const btn = document.querySelector('#quickReturnModal .btn-primary');
+      btn.disabled = true;
+      try {
+        const res = await window.api.ops.createReturn({
+          type: 'sale',
+          reason: document.getElementById('quickReason').value,
+          destination: dest,
+          items: quickReturnItems.map(i => ({ productId: i.productId, qty: i.qty, price: i.price }))
+        });
+        closeModal('quickReturnModal');
+        loadReturns();
+        window.showAlert(
+          `تم الرجّع بفاتورة ${res.returnNumber}\n` +
+          (Number(res.cashAmount) > 0
+            ? `صرفنا ${Number(res.cashAmount).toLocaleString()} من ${res.cashPool === 'drawer' ? 'الدرج' : 'الخزينة'} والمخزون اترجع.`
+            : 'المخزون اترجع بس — مافيش فلوس اتصرفت.'));
+      } catch (e) {
+        window.showAlert(e.message || 'مقدرناش نعمل الرجّع', 'error');
+      } finally { btn.disabled = false; }
+    }
+
     // ====== Editing an existing return invoice ======
     let editingReturnId = null;
     let editingReturnItems = [];
@@ -860,6 +1025,59 @@
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
     loadReturns();
   </script>
+  <div id="quickReturnModal" class="modal-overlay" style="display:none;z-index:1400;">
+    <div class="modal" style="max-width:640px;">
+      <h2>⚡ رجّع بدون فاتورة</h2>
+      <p style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px;">
+        امسح باركود المنتج أو دوّر عليه، حط الكمية، واختار الفلوس. المبلغ بيرجع للمخزون على طول.
+      </p>
+
+      <div class="form-group">
+        <label>المنتج (باركود أو اسم)</label>
+        <input type="text" id="quickProductSearch" class="form-input" placeholder="امسح الباركود أو ابحث بالاسم" autocomplete="off"
+               oninput="quickSearchProducts(this.value)"
+               onkeydown="if (event.key === 'Enter') { const r = document.querySelector('#quickProductResults div'); if (r) r.dispatchEvent(new MouseEvent('mousedown')); }">
+        <div id="quickProductResults" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:4px;display:none;"></div>
+      </div>
+
+      <div class="form-group">
+        <label>السبب</label>
+        <select id="quickReason" class="form-input">
+          <option value="مقاس غير مناسب">مقاس غير مناسب</option>
+          <option value="لون مختلف">لون مختلف</option>
+          <option value="عيب في التصنيع">عيب في التصنيع</option>
+          <option value="تالف">تالف</option>
+          <option value="العميل غير موافق">العميل غير موافق</option>
+          <option value="أخرى">أخرى</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>الفلوس هتروح فين؟</label>
+        <select id="quickDestination" class="form-input" onchange="updateQuickHint()">
+          <option value="drawer">💵 صرف من الدرج (كاش للعميل)</option>
+          <option value="treasury">🏦 صرف من الخزينة</option>
+          <option value="none">🚫 مش هاخد منه حاجة (مخزون بس)</option>
+        </select>
+        <p id="quickDestHint" style="font-size:11px;color:var(--text-secondary);margin-top:5px;"></p>
+      </div>
+
+      <div class="form-group">
+        <label>الأصناف المرتجعة</label>
+        <div id="quickItemsBox" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>
+      </div>
+
+      <div style="text-align:left;background:var(--bg);padding:10px;border-radius:6px;margin:8px 0;">
+        الإجمالي: <b id="quickTotal" style="color:var(--danger);font-size:17px;">0</b>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="submitQuickReturn()">تأكيد الرجّع</button>
+        <button class="btn" onclick="closeModal('quickReturnModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
   <div id="editReturnModal" class="modal-overlay" style="display:none;z-index:1400;">
     <div class="modal" style="max-width:680px;">
       <h2 id="editModalTitle">تعديل فاتورة المرتجع</h2>

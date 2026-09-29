@@ -673,7 +673,11 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
 // inserted a line per item and then moved the money per line, so a refusal
 // part-way through left lines with no document and cash that never moved.
 // One document and one transaction now.
-const RETURN_DESTINATIONS = ['debt', 'drawer', 'treasury'];
+// 'none' = the return moves no money at all: the goods go back to stock and the
+// sale side is never settled. Used for a return made without a source invoice,
+// where there is no customer debt to clear and no cash to hand over.
+// 'debt' with a sale/purchase id reduces that party's invoice balance.
+const RETURN_DESTINATIONS = ['debt', 'drawer', 'treasury', 'none'];
 const returnContainerMap = () => {
   const m = new Map();
   for (const l of db.all('SELECT container_id, unit_id, units_per_container FROM product_compositions')) {
@@ -733,20 +737,29 @@ function buildReturnDocument(u, p) {
     }
   } else {
     const sid = parseInt(p.saleId, 10);
-    if (!sid) throw new Error('اختر فاتورة البيع');
-    sale = db.get('SELECT id, invoice_number, remaining_amount FROM sales WHERE id = ?', [sid]);
-    if (!sale) throw new Error('فاتورة البيع غير موجودة');
-    sourceInvoice = sale.invoice_number;
-    // Never hand back more than was sold, and never hand the same unit back
-    // twice: the renderer used to be the only thing enforcing this.
-    for (const l of lines) {
-      const sold = Number(db.get('SELECT COALESCE(SUM(quantity),0) q FROM sale_items WHERE sale_id = ? AND product_id = ?', [sid, l.productId]).q);
-      const back = Number(db.get("SELECT COALESCE(SUM(quantity),0) q FROM returns WHERE (type='sale' OR type IS NULL) AND sale_id = ? AND product_id = ?", [sid, l.productId]).q);
-      if (l.qty > sold - back) {
-        const row = db.get('SELECT name FROM products WHERE id = ?', [l.productId]);
-        throw new Error(`الكمية غير كافية للإرجاع: ${row ? row.name : l.productId} (متاح ${sold - back})`);
+    if (sid) {
+      sale = db.get('SELECT id, invoice_number, remaining_amount FROM sales WHERE id = ?', [sid]);
+      if (!sale) throw new Error('فاتورة البيع غير موجودة');
+      sourceInvoice = sale.invoice_number;
+      // Never hand back more than was sold, and never hand the same unit back
+      // twice: the renderer used to be the only thing enforcing this.
+      for (const l of lines) {
+        const sold = Number(db.get('SELECT COALESCE(SUM(quantity),0) q FROM sale_items WHERE sale_id = ? AND product_id = ?', [sid, l.productId]).q);
+        const back = Number(db.get("SELECT COALESCE(SUM(quantity),0) q FROM returns WHERE (type='sale' OR type IS NULL) AND sale_id = ? AND product_id = ?", [sid, l.productId]).q);
+        if (l.qty > sold - back) {
+          const row = db.get('SELECT name FROM products WHERE id = ?', [l.productId]);
+          throw new Error(`الكمية غير كافية للإرجاع: ${row ? row.name : l.productId} (متاح ${sold - back})`);
+        }
       }
+    } else if (destination === 'debt') {
+      // Debt has to reduce a balance, and the balance lives on the sale or
+      // purchase row. Without a source invoice there is nothing to reduce, so
+      // a debt destination is only valid when a source was given. Cash out of
+      // the drawer or treasury is fine either way.
+      throw new Error('اختر فاتورة البيع عشان تخصم من مديونية عميل');
     }
+    // drawer / treasury / none with no sale: the goods go back to stock and the
+    // money is handed over (or not) without touching a customer balance.
   }
 
   // Debt takes what it can; anything left over goes to the pool the old flow
@@ -755,7 +768,9 @@ function buildReturnDocument(u, p) {
   let debtReduced = 0;
   let cashAmount = 0;
   let cashPool = null;
-  if (destination === 'debt') {
+  if (destination === 'none') {
+    // Stock only: nothing is paid out and no balance is cleared.
+  } else if (destination === 'debt') {
     const owed = Number((isPurchase ? purchase : sale).remaining_amount) || 0;
     debtReduced = Math.max(0, Math.min(total, owed));
     const rest = Math.round((total - debtReduced) * 100) / 100;
