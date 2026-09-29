@@ -26,6 +26,7 @@
         <div style="display:flex;gap:8px;">
           <button class="btn btn-sm btn-warning" id="addReturnBtn" onclick="showReturnModal()" style="${window.can('returns','a')?'':'display:none'}">↩️ إرجاع مبيعات</button>
           <button class="btn btn-sm btn-info" id="addPurchaseReturnBtn" onclick="showPurchaseReturnModal()" style="${window.can('returns','a')?'':'display:none'}">📥 إرجاع مشتريات</button>
+          <button class="btn btn-sm" onclick="window.print()">🖨️ طباعة الصفحة</button>
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
@@ -206,7 +207,9 @@
             <td>${esc(d.reason) || '-'}</td>
             <td>${esc(d.created_at)}</td>
             <td class="actions" onclick="event.stopPropagation()">
-              ${window.can('returns','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteReturn(${d.id})">حذف الفاتورة</button>` : ''}
+              <button class="btn btn-sm" onclick="printReturnDoc(${d.id})" title="طباعة A4">🖨️</button>
+              ${window.can('returns','u') ? `<button class="btn btn-sm btn-warning" onclick="editReturn(${d.id})">تعديل</button>` : ''}
+              ${window.can('returns','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteReturn(${d.id})">حذف</button>` : ''}
             </td></tr>
           <tr id="detail-${d.id}" style="display:none;"><td colspan="10" style="padding:0;border-bottom:2px solid var(--border);">${rows}${debt ? `<div style="padding:4px 10px 8px 0;font-size:12px;">${debt}</div>` : ''}</td></tr>`;
       }).join('');
@@ -761,9 +764,142 @@
       loadReturns();
     }
 
+    // ====== Editing an existing return invoice ======
+    let editingReturnId = null;
+    let editingReturnItems = [];
+
+    async function editReturn(documentId) {
+      const doc = await window.api.db.get("SELECT * FROM return_documents WHERE id=?", [documentId]);
+      if (!doc) return;
+      const lines = await window.api.db.all(
+        `SELECT r.product_id, r.quantity, r.amount, p.name AS product_name, p.sell_price
+         FROM returns r LEFT JOIN products p ON p.id = r.product_id WHERE r.document_id = ? ORDER BY r.id`, [documentId]);
+      if (!lines.length) return;
+
+      editingReturnId = documentId;
+      editingReturnItems = lines.map(l => {
+        const qty = Number(l.quantity) || 0;
+        return { productId: l.product_id, name: l.product_name || '-', qty, price: qty ? Number(l.amount) / qty : 0 };
+      });
+      const isPurchase = doc.type === 'purchase';
+      document.getElementById('editModalTitle').textContent = `تعديل فاتورة ${doc.return_number}`;
+      document.getElementById('editModalHint').textContent =
+        isPurchase
+          ? 'التعديل هيعكس المرتجع القديم بالكامل ويعمله من جديد — المخزون والمديونية والنقد هيترجعوا لحالتهم الأولانية.'
+          : 'التعديل هيعكس المرتجع القديم بالكامل ويعمله من جديد — المخزون والمديونية والنقد هيترجعوا لحالتهم الأولانية.';
+      document.getElementById('editSourceInfo').textContent =
+        `${doc.source_invoice || '-'} — ${isPurchase ? 'مرتجع مشتريات' : 'مرتجع مبيعات'}`;
+      document.getElementById('editReason').value = doc.reason || '';
+      // A debt destination needs a source invoice with an outstanding balance;
+      // if the original one cannot be shown the option is hidden rather than
+      // offered and then rejected server side.
+      const dest = document.getElementById('editDestination');
+      dest.value = doc.cash_pool || 'drawer';
+      renderEditItems();
+      document.getElementById('editReturnModal').style.display = 'flex';
+    }
+
+    function renderEditItems() {
+      document.getElementById('editItemsBox').innerHTML = editingReturnItems.map((it, idx) => `
+        <div style="display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--border);">
+          <div style="flex:1;font-size:13px;">${esc(it.name)}</div>
+          <input type="number" min="1" step="1" value="${it.qty}" class="form-input" style="width:70px;"
+                 oninput="updateEditQty(${idx}, this.value)">
+          <input type="number" min="0" step="0.01" value="${it.price}" class="form-input" style="width:90px;"
+                 oninput="updateEditPrice(${idx}, this.value)">
+          <div style="width:90px;text-align:left;font-weight:700;color:var(--danger);" id="editLine-${idx}">${(it.qty * it.price).toLocaleString()}</div>
+          <button class="btn btn-sm btn-danger" onclick="removeEditItem(${idx})">✕</button>
+        </div>`).join('');
+      updateEditTotal();
+    }
+
+    function updateEditQty(idx, v) {
+      const q = parseInt(v, 10);
+      if (!Number.isInteger(q) || q <= 0) return;
+      editingReturnItems[idx].qty = q;
+      const el = document.getElementById('editLine-' + idx);
+      if (el) el.textContent = (q * editingReturnItems[idx].price).toLocaleString();
+      updateEditTotal();
+    }
+    function updateEditPrice(idx, v) {
+      const p = Number(v);
+      if (!Number.isFinite(p) || p < 0) return;
+      editingReturnItems[idx].price = p;
+      const el = document.getElementById('editLine-' + idx);
+      if (el) el.textContent = (editingReturnItems[idx].qty * p).toLocaleString();
+      updateEditTotal();
+    }
+    function removeEditItem(idx) { editingReturnItems.splice(idx, 1); renderEditItems(); }
+    function updateEditTotal() {
+      document.getElementById('editNewTotal').textContent =
+        editingReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+    }
+
+    async function saveReturnEdit() {
+      if (!editingReturnItems.length) { window.showAlert('سيب صنف واحد على الأقل', 'error'); return; }
+      const btn = document.querySelector('#editReturnModal .btn-primary');
+      btn.disabled = true;
+      try {
+        const res = await window.api.ops.updateReturn(editingReturnId, {
+          items: editingReturnItems.map(i => ({ productId: i.productId, qty: i.qty, price: i.price })),
+          reason: document.getElementById('editReason').value,
+          destination: document.getElementById('editDestination').value
+        });
+        closeModal('editReturnModal');
+        loadReturns();
+        window.showAlert(`تم تعديل الفاتورة ${res.returnNumber}\nالإجمالي الجديد ${Number(res.total).toLocaleString()}`);
+      } catch (e) {
+        window.showAlert(e.message || 'مقدرناش نعدّل الفاتورة', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function printReturnDoc(documentId) { window.api.print.returnDoc(documentId); }
+
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
     loadReturns();
   </script>
+  <div id="editReturnModal" class="modal-overlay" style="display:none;z-index:1400;">
+    <div class="modal" style="max-width:680px;">
+      <h2 id="editModalTitle">تعديل فاتورة المرتجع</h2>
+      <p style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px;" id="editModalHint"></p>
+
+      <div class="form-group">
+        <label>الفاتورة المصدر</label>
+        <div id="editSourceInfo" style="font-weight:700;color:var(--primary);"></div>
+      </div>
+
+      <div class="form-group">
+        <label>الأصناف</label>
+        <div id="editItemsBox" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>
+      </div>
+
+      <div class="form-group">
+        <label>السبب</label>
+        <input type="text" id="editReason" class="form-input" placeholder="سبب المرتجع">
+      </div>
+
+      <div class="form-group">
+        <label>وجهة المبلغ</label>
+        <select id="editDestination" class="form-input">
+          <option value="drawer">الدرج (نقدي)</option>
+          <option value="treasury">الخزينة</option>
+          <option value="debt">خصم من المديونية</option>
+        </select>
+      </div>
+
+      <div style="text-align:left;background:var(--bg);padding:10px;border-radius:6px;margin:8px 0;">
+        الإجمالي الجديد: <b id="editNewTotal" style="color:var(--danger);font-size:17px;">0</b>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="saveReturnEdit()">حفظ التعديل</button>
+        <button class="btn" onclick="closeModal('editReturnModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
   <script src="../js/sidebar.js"></script>
 </body>
 </html>

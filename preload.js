@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   ops: {
     createSale: (payload) => ipcRenderer.invoke('pos-create-sale', payload),
     createReturn: (payload) => ipcRenderer.invoke('returns-create', payload),
+    updateReturn: (documentId, payload) => ipcRenderer.invoke('returns-update', documentId, payload),
     deleteReturnDoc: (documentId) => ipcRenderer.invoke('returns-delete', documentId),
     settleDebt: (party, payments, drawerBreakdown) => ipcRenderer.invoke('debt-settle', party, payments, drawerBreakdown),
     addDebtEntry: (customerId, amount, description) => ipcRenderer.invoke('debt-add-entry', customerId, amount, description),
@@ -58,6 +59,7 @@ contextBridge.exposeInMainWorld('api', {
 
   print: {
     invoice: (data) => ipcRenderer.invoke('print-invoice', data),
+    returnDoc: (documentId) => ipcRenderer.invoke('print-return', documentId),
   },
 
   backup: {

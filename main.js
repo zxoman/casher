@@ -695,9 +695,12 @@ const moveReturnStock = (containers, productId, qty, delta) => {
   else db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [delta * qty, productId]);
 };
 
-ipcMain.handle('returns-create', (_, payload) => {
-  const u = requirePerm('returns', 'a');
-  const p = payload || {};
+// Validates a return basket, works out the debt/cash split, and writes the
+// document, its lines, the stock moves and the money movement. Shared by
+// returns-create and returns-update so an edited invoice is built exactly the
+// way a new one is.
+// `p.reuseNumber` lets an edit keep the number of the invoice it corrects.
+function buildReturnDocument(u, p) {
   const isPurchase = p.type === 'purchase';
   const raw = Array.isArray(p.items) ? p.items : [];
   if (!raw.length) throw new Error('اختر منتجات للإرجاع');
@@ -763,14 +766,17 @@ ipcMain.handle('returns-create', (_, payload) => {
   }
 
   const stockDelta = isPurchase ? -1 : 1;
-  const out = db.transaction(() => {
+  {
     const type = isPurchase ? 'purchase' : 'sale';
     // Numbered off the highest number already issued for this type, not off the
     // row id: the ids are shared with purchase returns, so id + 1 skipped
     // numbers. Taking the max suffix also means a deleted invoice does not
     // hand its number to the next one.
     const seq = db.get("SELECT COALESCE(MAX(CAST(SUBSTR(return_number, 7) AS INTEGER)), 0) + 1 AS n FROM return_documents WHERE type = ?", [type]).n;
-    const returnNumber = `${isPurchase ? 'RET-P' : 'RET-S'}-${String(seq).padStart(5, '0')}`;
+    // An edit keeps the number of the invoice it is correcting. The old row has
+    // already been purged by the time we get here, so the sequence would
+    // otherwise hand out the same number to a different invoice.
+    const returnNumber = p.reuseNumber || `${isPurchase ? 'RET-P' : 'RET-S'}-${String(seq).padStart(5, '0')}`;
     const docId = db.run(
       `INSERT INTO return_documents (return_number, type, sale_id, purchase_id, source_invoice, total, debt_reduced, cash_amount, cash_pool, reason, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [returnNumber, type, sale ? sale.id : null, purchase ? purchase.id : null, sourceInvoice, total, debtReduced, cashAmount, cashPool, p.reason || '', u.id]
@@ -803,8 +809,14 @@ ipcMain.handle('returns-create', (_, payload) => {
     }
     db.auditLog(u.id, isPurchase ? 'مرتجع مشتريات' : 'مرتجع مبيعات', `${returnNumber}: ${total} (نقدي ${cashAmount} من ${cashPool || 'لا شيء'})`);
     return { success: true, documentId: docId, returnNumber, total, debtReduced, cashAmount, cashPool };
-  });
-  return out;
+  }
+}
+
+ipcMain.handle('returns-create', (_, payload) => {
+  const u = requirePerm('returns', 'a');
+  // Wrapped here so a create is one atomic unit; returns-update already runs
+  // inside its own transaction and calls buildReturnDocument directly.
+  return db.transaction(() => buildReturnDocument(u, payload || {}));
 });
 
 // Undoes one whole return invoice: stock, the debt it cleared and its cash rows,
@@ -831,6 +843,44 @@ function purgeReturnDocument(id, containers) {
   db.run('DELETE FROM return_documents WHERE id = ?', [id]);
   return doc;
 }
+
+// Rewrites a return invoice. The old lines, their stock moves, the debt they
+// cleared and the money they moved are all undone by purgeReturnDocument, then
+// the document is rebuilt from the submitted basket through the same path a
+// fresh return takes, so an edit cannot end up half applied.
+ipcMain.handle('returns-update', (_, documentId, payload) => {
+  const u = requirePerm('returns', 'u');
+  const id = parseInt(documentId, 10);
+  if (!Number.isInteger(id)) throw new Error('رقم المرتجع غير صالح');
+  const p = payload || {};
+
+  return db.transaction(() => {
+    const existing = db.get('SELECT * FROM return_documents WHERE id = ?', [id]);
+    if (!existing) throw new Error('المرتجع مش موجود');
+    if (existing.type !== (p.type || existing.type)) throw new Error('نوع المرتجع مش قابل للتغيير');
+
+    const items = Array.isArray(p.items) ? p.items : [];
+    if (!items.length) throw new Error('اختر منتجات للإرجاع');
+
+    const containers = returnContainerMap();
+    // Undo first, so the validation below runs against the stock the products
+    // have right now, not against the stock the old return had already taken.
+    purgeReturnDocument(id, containers);
+    resyncContainerStock(containers);
+    // The old document row is gone, so the number has to be carried over from
+    // what was read before the purge: an edited invoice keeps the number the
+    // customer was already given.
+    return buildReturnDocument(u, {
+      type: existing.type,
+      reuseNumber: existing.return_number,
+      saleId: p.saleId != null ? p.saleId : existing.sale_id,
+      purchaseId: p.purchaseId != null ? p.purchaseId : existing.purchase_id,
+      reason: p.reason != null ? p.reason : existing.reason,
+      destination: p.destination || 'drawer',
+      items
+    });
+  });
+});
 
 ipcMain.handle('returns-delete', (_, documentId) => {
   const u = requirePerm('returns', 'd');
@@ -1213,6 +1263,59 @@ ipcMain.handle('cash-getBalance', () => { requireAuth();  const cash = db.get("S
     drawer_instapay: ip ? ip.balance : 0,
     treasury: treasury ? treasury.balance : 0
   };
+});
+
+// A4 return sheet. Returns are a different document from a sale invoice: the
+// drawer moves the other way, the money often clears a supplier debt instead of
+// being handed over, and it is filed rather than given to the customer, so the
+// thermal receipt layout is the wrong shape for it.
+ipcMain.handle('print-return', (_, docId) => {
+  requireAuth();
+  const { BrowserWindow } = require('electron');
+  const id = parseInt(docId, 10);
+  const doc = Number.isInteger(id) ? db.get('SELECT * FROM return_documents WHERE id = ?', [id]) : null;
+  if (!doc) throw new Error('المرتجع مش موجود');
+
+  const lines = db.all(
+    'SELECT r.product_id, r.quantity, r.amount, p.name AS product_name FROM returns r LEFT JOIN products p ON p.id = r.product_id WHERE r.document_id = ? ORDER BY r.id',
+    [id]);
+  const items = lines.map(l => {
+    const qty = Number(l.quantity) || 0;
+    // amount is the line total, so the unit price has to come back out of it.
+    return { name: l.product_name || '-', qty, price: qty ? Number(l.amount) / qty : 0 };
+  });
+  const usr = doc.user_id ? db.get('SELECT full_name, username FROM users WHERE id = ?', [doc.user_id]) : null;
+  const cashAmount = Number(doc.cash_amount) || 0;
+
+  const printWin = new BrowserWindow({
+    width: 820, height: 1000, show: false, autoHideMenuBar: true,
+    webPreferences: { contextIsolation: false, nodeIntegration: false }
+  });
+  const q = new URLSearchParams({
+    type: doc.type,
+    number: doc.return_number || '',
+    source: doc.source_invoice || '',
+    total: Number(doc.total) || 0,
+    debt: Number(doc.debt_reduced) || 0,
+    cash: cashAmount,
+    pool: doc.cash_pool || '',
+    reason: doc.reason || '',
+    user: (usr && (usr.full_name || usr.username)) || '-',
+    date: doc.created_at || '',
+    shop: db.getSetting('shop_name') || 'الكاشير',
+    phone: db.getSetting('shop_phone') || '',
+    address: db.getSetting('shop_address') || '',
+    items: encodeURIComponent(JSON.stringify(items))
+  });
+  printWin.loadURL(`file://${path.join(__dirname, 'src', 'print-return.html')}?${q.toString()}`);
+  printWin.once('ready-to-show', () => { printWin.show(); printWin.focus(); });
+  printWin.webContents.on('did-finish-load', () => {
+    setTimeout(() => {
+      // A4 explicitly: without pageSize the sheet follows the default paper of
+      // whatever printer is installed, which came out 80mm on thermal setups.
+      printWin.webContents.print({ silent: false, pageSize: 'A4' }, () => printWin.close());
+    }, 300);
+  });
 });
 
 ipcMain.handle('print-invoice', (_, data) => {

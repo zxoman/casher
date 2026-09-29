@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>فاتورة مرتجع</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; font-size: 12pt; }
+  .sheet { padding: 0; }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-start;
+          border-bottom: 2.5px solid #000; padding-bottom: 6mm; }
+  .shop h1 { font-size: 20pt; }
+  .shop .phone { font-size: 11pt; font-weight: 600; }
+  .shop .meta { font-size: 9pt; color: #444; margin-top: 1mm; }
+  .doc { text-align: left; }
+  .doc .kind { font-size: 15pt; font-weight: 700; padding: 2mm 4mm; color: #fff;
+               display: inline-block; background: #000; }
+  .doc .kind.sale { background: #b45309; }
+  .doc .kind.purchase { background: #1d4ed8; }
+  .doc .num { font-size: 15pt; font-weight: 700; margin-top: 3mm; direction: ltr; }
+  .doc .date { font-size: 9.5pt; color: #444; margin-top: 1mm; }
+
+  .facts { display: flex; gap: 4mm; margin: 6mm 0; }
+  .fact { flex: 1; border: 1px solid #bbb; padding: 3mm 4mm; }
+  .fact .k { font-size: 8.5pt; color: #666; }
+  .fact .v { font-size: 12pt; font-weight: 600; margin-top: 1mm; word-break: break-word; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+  thead th { background: #eee; border: 1px solid #999; padding: 2.5mm 2mm; font-size: 10.5pt; text-align: right; }
+  thead th.num { text-align: left; direction: ltr; }
+  tbody td { border: 1px solid #ccc; padding: 2.5mm 2mm; font-size: 11pt; }
+  tbody td.num { text-align: left; direction: ltr; }
+  tbody tr:nth-child(even) td { background: #f7f7f7; }
+  tfoot td { border: 1px solid #999; padding: 3mm 2mm; font-weight: 700; font-size: 11.5pt; background: #f0f0f0; }
+  tfoot td.num { text-align: left; direction: ltr; }
+
+  .money { display: flex; gap: 4mm; margin-top: 6mm; }
+  .money .box { flex: 1; border: 1px solid #999; padding: 3mm 4mm; }
+  .money .box .k { font-size: 8.5pt; color: #666; }
+  .money .box .v { font-size: 13pt; font-weight: 700; margin-top: 1mm; direction: ltr; text-align: right; }
+  .note { margin-top: 5mm; border: 1px dashed #999; padding: 3mm 4mm; font-size: 10pt; }
+  .note .k { color: #666; font-size: 8.5pt; }
+  .note .v { margin-top: 1mm; min-height: 8mm; }
+  .signs { display: flex; gap: 8mm; margin-top: 12mm; }
+  .signs div { flex: 1; border-top: 1px solid #000; padding-top: 2mm; font-size: 9.5pt; color: #444; text-align: center; }
+  .foot { margin-top: 8mm; text-align: center; font-size: 8.5pt; color: #666;
+          border-top: 1px solid #ccc; padding-top: 3mm; }
+  .draft { position: fixed; top: -1000px; }
+</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="head">
+      <div class="shop">
+        <h1 id="shopName">الكاشير</h1>
+        <div class="phone" id="shopPhone"></div>
+        <div class="meta" id="shopMeta"></div>
+      </div>
+      <div class="doc">
+        <div class="kind" id="kindLabel">فاتورة مرتجع</div>
+        <div class="num" id="returnNumber"></div>
+        <div class="date" id="docDate"></div>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><div class="k">الفاتورة المصدر</div><div class="v" id="sourceInvoice">-</div></div>
+      <div class="fact"><div class="k">نوع المرتجع</div><div class="v" id="typeLabel">-</div></div>
+      <div class="fact"><div class="k">المستخدم</div><div class="v" id="cashier">-</div></div>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th style="width:8mm;">#</th>
+        <th>الصنف</th>
+        <th class="num" style="width:18mm;">الكمية</th>
+        <th class="num" style="width:28mm;">سعر الوحدة</th>
+        <th class="num" style="width:30mm;">الإجمالي</th>
+      </tr></thead>
+      <tbody id="itemsBody"></tbody>
+      <tfoot><tr>
+        <td colspan="2">الإجمالي</td>
+        <td class="num" id="qtyTotal">0</td>
+        <td></td>
+        <td class="num" id="grandTotal">0.00</td>
+      </tr></tfoot>
+    </table>
+
+    <div class="money">
+      <div class="box"><div class="k">إجمالي المرتجع</div><div class="v" id="totalDisplay">0.00</div></div>
+      <div class="box"><div class="k">خصم من مديونية</div><div class="v" id="debtDisplay">0.00</div></div>
+      <div class="box"><div class="k">المبلغ النقدي</div><div class="v" id="cashDisplay">0.00</div></div>
+    </div>
+
+    <div class="note">
+      <div class="k">سبب المرتجع / ملاحظات</div>
+      <div class="v" id="reasonText">-</div>
+    </div>
+
+    <div class="signs">
+      <div>توقيع المستلم</div>
+      <div>توقيع الكاشير</div>
+      <div>الإدارة</div>
+    </div>
+
+    <div class="foot" id="footLine"></div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const n = (k, d) => params.get(k) === null ? d : params.get(k);
+    const fmt = v => (Number(v) || 0).toFixed(2);
+
+    document.getElementById('shopName').textContent = n('shop', 'الكاشير');
+    document.getElementById('shopPhone').textContent = n('phone', '');
+    const meta = [n('address', ''), n('shopMeta', '')].filter(Boolean).join(' — ');
+    document.getElementById('shopMeta').textContent = meta;
+
+    const isPurchase = n('type', 'sale') === 'purchase';
+    const kind = document.getElementById('kindLabel');
+    kind.textContent = isPurchase ? 'إشعار مرتجع مشتريات' : 'إشعار مرتجع مبيعات';
+    kind.className = 'kind ' + (isPurchase ? 'purchase' : 'sale');
+
+    document.getElementById('returnNumber').textContent = n('number', '-');
+    document.getElementById('sourceInvoice').textContent = n('source', '-');
+    document.getElementById('typeLabel').textContent = isPurchase ? 'مرتجع مشتريات' : 'مرتجع مبيعات';
+    document.getElementById('cashier').textContent = n('user', '-');
+    document.getElementById('docDate').textContent = n('date', '');
+
+    const total = n('total', '0');
+    const debt = n('debt', '0');
+    const cash = n('cash', '0');
+    document.getElementById('totalDisplay').textContent = fmt(total);
+    document.getElementById('debtDisplay').textContent = fmt(debt);
+    document.getElementById('cashDisplay').textContent = fmt(cash);
+    document.getElementById('grandTotal').textContent = fmt(total);
+    document.getElementById('reasonText').textContent = n('reason', '') || '-';
+
+    let items = [];
+    try { items = JSON.parse(decodeURIComponent(params.get('items') || '[]')); } catch (e) { items = []; }
+    let qty = 0;
+    document.getElementById('itemsBody').innerHTML = items.map((it, i) => {
+      qty += Number(it.qty) || 0;
+      const amount = (Number(it.price) || 0) * (Number(it.qty) || 0);
+      return `<tr>
+        <td class="num">${i + 1}</td>
+        <td>${it.name || '-'}</td>
+        <td class="num">${it.qty}</td>
+        <td class="num">${fmt(it.price)}</td>
+        <td class="num">${fmt(amount)}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('qtyTotal').textContent = qty;
+
+    const pool = n('pool', '');
+    const poolLabel = pool === 'drawer' ? 'الدرج' : pool === 'treasury' ? 'الخزينة' : '';
+    document.getElementById('footLine').textContent =
+      (Number(cash) > 0 && poolLabel ? 'صُرف المبلغ النقدي من ' + poolLabel + ' — ' : '') +
+      'مستند صادر من برنامج الكاشير';
+  </script>
+</body>
+</html>
