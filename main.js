@@ -664,6 +664,186 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
   return out;
 });
 
+// --- returns: one document per return, not one row per item ---
+// Returning goods is what a return IS, so returns.a authorises it. The old
+// flow asked for cash.drawer or cash.treasury on top of it from the renderer,
+// so a user with return rights could not get the money back at all; and it
+// inserted a line per item and then moved the money per line, so a refusal
+// part-way through left lines with no document and cash that never moved.
+// One document and one transaction now.
+const RETURN_DESTINATIONS = ['debt', 'drawer', 'treasury'];
+const returnContainerMap = () => {
+  const m = new Map();
+  for (const l of db.all('SELECT container_id, unit_id, units_per_container FROM product_compositions')) {
+    m.set(l.container_id, { unitId: l.unit_id, unitsPerContainer: Number(l.units_per_container) || 1 });
+  }
+  return m;
+};
+// Container stock is a reading of the unit stock, not an independent count.
+const resyncContainerStock = (containers) => {
+  for (const [containerId, link] of containers) {
+    const unit = db.get('SELECT stock FROM products WHERE id = ?', [link.unitId]);
+    db.run('UPDATE products SET stock = ? WHERE id = ?',
+      [Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer), containerId]);
+  }
+};
+const moveReturnStock = (containers, productId, qty, delta) => {
+  const link = containers.get(productId);
+  if (link) db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [delta * qty * link.unitsPerContainer, link.unitId]);
+  else db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [delta * qty, productId]);
+};
+
+ipcMain.handle('returns-create', (_, payload) => {
+  const u = requirePerm('returns', 'a');
+  const p = payload || {};
+  const isPurchase = p.type === 'purchase';
+  const raw = Array.isArray(p.items) ? p.items : [];
+  if (!raw.length) throw new Error('اختر منتجات للإرجاع');
+  const destination = RETURN_DESTINATIONS.includes(p.destination) ? p.destination : null;
+  if (!destination) throw new Error('اختر وجهة المبلغ');
+
+  const containers = returnContainerMap();
+  const lines = raw.map((it) => {
+    const productId = parseInt(it && it.productId, 10);
+    const qty = Number(it && it.qty);
+    const price = Number(it && it.price);
+    if (!Number.isInteger(productId) || productId <= 0) throw new Error('صنف غير صالح للإرجاع');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('كمية غير صالحة');
+    if (!Number.isFinite(price) || price < 0) throw new Error('سعر غير صالح');
+    if (!db.get('SELECT id FROM products WHERE id = ?', [productId])) throw new Error('منتج غير موجود');
+    return { productId, qty, price, amount: qty * price };
+  });
+  const total = lines.reduce((s, l) => s + l.amount, 0);
+
+  let sale = null;
+  let purchase = null;
+  let sourceInvoice = null;
+  if (isPurchase) {
+    if (destination === 'debt') {
+      const pid = parseInt(p.purchaseId, 10);
+      if (!pid) throw new Error('اختر فاتورة مشتريات عليها مديونية');
+      purchase = db.get('SELECT id, invoice_number, remaining_amount FROM purchases WHERE id = ?', [pid]);
+      if (!purchase) throw new Error('فاتورة المشتريات غير موجودة');
+      sourceInvoice = purchase.invoice_number;
+    }
+  } else {
+    const sid = parseInt(p.saleId, 10);
+    if (!sid) throw new Error('اختر فاتورة البيع');
+    sale = db.get('SELECT id, invoice_number, remaining_amount FROM sales WHERE id = ?', [sid]);
+    if (!sale) throw new Error('فاتورة البيع غير موجودة');
+    sourceInvoice = sale.invoice_number;
+    // Never hand back more than was sold, and never hand the same unit back
+    // twice: the renderer used to be the only thing enforcing this.
+    for (const l of lines) {
+      const sold = Number(db.get('SELECT COALESCE(SUM(quantity),0) q FROM sale_items WHERE sale_id = ? AND product_id = ?', [sid, l.productId]).q);
+      const back = Number(db.get("SELECT COALESCE(SUM(quantity),0) q FROM returns WHERE (type='sale' OR type IS NULL) AND sale_id = ? AND product_id = ?", [sid, l.productId]).q);
+      if (l.qty > sold - back) {
+        const row = db.get('SELECT name FROM products WHERE id = ?', [l.productId]);
+        throw new Error(`الكمية غير كافية للإرجاع: ${row ? row.name : l.productId} (متاح ${sold - back})`);
+      }
+    }
+  }
+
+  // Debt takes what it can; anything left over goes to the pool the old flow
+  // used (a customer return pays out of the drawer, a supplier return lands in
+  // the treasury).
+  let debtReduced = 0;
+  let cashAmount = 0;
+  let cashPool = null;
+  if (destination === 'debt') {
+    const owed = Number((isPurchase ? purchase : sale).remaining_amount) || 0;
+    debtReduced = Math.max(0, Math.min(total, owed));
+    const rest = Math.round((total - debtReduced) * 100) / 100;
+    if (rest > 0) { cashAmount = rest; cashPool = isPurchase ? 'treasury' : 'drawer'; }
+  } else {
+    cashAmount = total;
+    cashPool = destination;
+  }
+
+  const stockDelta = isPurchase ? -1 : 1;
+  const out = db.transaction(() => {
+    const type = isPurchase ? 'purchase' : 'sale';
+    // Numbered off the highest number already issued for this type, not off the
+    // row id: the ids are shared with purchase returns, so id + 1 skipped
+    // numbers. Taking the max suffix also means a deleted invoice does not
+    // hand its number to the next one.
+    const seq = db.get("SELECT COALESCE(MAX(CAST(SUBSTR(return_number, 7) AS INTEGER)), 0) + 1 AS n FROM return_documents WHERE type = ?", [type]).n;
+    const returnNumber = `${isPurchase ? 'RET-P' : 'RET-S'}-${String(seq).padStart(5, '0')}`;
+    const docId = db.run(
+      `INSERT INTO return_documents (return_number, type, sale_id, purchase_id, source_invoice, total, debt_reduced, cash_amount, cash_pool, reason, user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [returnNumber, type, sale ? sale.id : null, purchase ? purchase.id : null, sourceInvoice, total, debtReduced, cashAmount, cashPool, p.reason || '', u.id]
+    ).lastInsertRowid;
+
+    for (const l of lines) {
+      const row = db.run(
+        'INSERT INTO returns (type, sale_id, sale_invoice, purchase_id, product_id, quantity, amount, reason, destination, user_id, document_id, debt_reduced) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [type, sale ? sale.id : null, sale ? sale.invoice_number : null, purchase ? purchase.id : null, l.productId, l.qty, l.amount, p.reason || '', isPurchase ? 'مورد' : 'مخزون', u.id, docId, 0]
+      );
+      // The debt share stays on the line as well, so the per-line figures the
+      // old rows carried keep their meaning.
+      const share = total > 0 ? debtReduced * (l.amount / total) : 0;
+      if (share > 0) db.run('UPDATE returns SET debt_reduced = ? WHERE id = ?', [share, row.lastInsertRowid]);
+    }
+    for (const l of lines) moveReturnStock(containers, l.productId, l.qty, stockDelta);
+    resyncContainerStock(containers);
+
+    if (debtReduced > 0) {
+      if (isPurchase) db.run('UPDATE purchases SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtReduced, purchase.id]);
+      else db.run('UPDATE sales SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtReduced, sale.id]);
+    }
+    if (cashAmount > 0) {
+      // A customer return takes money out of the shop, a supplier return brings
+      // it back in.
+      const signed = isPurchase ? cashAmount : -cashAmount;
+      const reason = `${isPurchase ? 'إرجاع مشتريات' : 'إرجاع مبيعات'} ${returnNumber}`;
+      if (cashPool === 'drawer') recordDrawer(u.id, 'نقدي', signed, reason, 'returndoc:' + docId);
+      else recordTreasury(u.id, signed, reason, 'returndoc:' + docId);
+    }
+    db.auditLog(u.id, isPurchase ? 'مرتجع مشتريات' : 'مرتجع مبيعات', `${returnNumber}: ${total} (نقدي ${cashAmount} من ${cashPool || 'لا شيء'})`);
+    return { success: true, documentId: docId, returnNumber, total, debtReduced, cashAmount, cashPool };
+  });
+  return out;
+});
+
+// Undoes one whole return invoice: stock, the debt it cleared and its cash rows,
+// then the lines and the header. Must run inside a transaction; the caller owns
+// the permission check and the audit entry.
+function purgeReturnDocument(id, containers) {
+  const doc = db.get('SELECT * FROM return_documents WHERE id = ?', [id]);
+  if (!doc) return null;
+  const lines = db.all('SELECT id, product_id, quantity FROM returns WHERE document_id = ?', [id]);
+  const isPurchase = doc.type === 'purchase';
+  for (const l of lines) moveReturnStock(containers, l.product_id, l.quantity, isPurchase ? 1 : -1);
+
+  const debt = Number(doc.debt_reduced) || 0;
+  if (debt > 0) {
+    if (isPurchase && doc.purchase_id) db.run('UPDATE purchases SET remaining_amount = remaining_amount + ? WHERE id = ?', [debt, doc.purchase_id]);
+    else if (!isPurchase && doc.sale_id) db.run('UPDATE sales SET remaining_amount = remaining_amount + ? WHERE id = ?', [debt, doc.sale_id]);
+  }
+  deleteCashByReference('returndoc:' + id);
+  // Documents folded in from the old per-line data still have their cash rows
+  // filed under the old per-line reference.
+  for (const l of lines) deleteCashByReference('return:' + l.id);
+
+  db.run('DELETE FROM returns WHERE document_id = ?', [id]);
+  db.run('DELETE FROM return_documents WHERE id = ?', [id]);
+  return doc;
+}
+
+ipcMain.handle('returns-delete', (_, documentId) => {
+  const u = requirePerm('returns', 'd');
+  const id = parseInt(documentId, 10);
+  if (!Number.isInteger(id)) throw new Error('رقم المرتجع غير صالح');
+  return db.transaction(() => {
+    const containers = returnContainerMap();
+    const doc = purgeReturnDocument(id, containers);
+    if (!doc) throw new Error('المرتجع مش موجود');
+    resyncContainerStock(containers);
+    db.auditLog(u.id, 'حذف مرتجع', String(doc.return_number || id));
+    return { success: true };
+  });
+});
+
 // ====== Named operations for the extra (non-CRUD) permissions ======
 // These own tables that TABLE_PERMS refuses to expose to raw SQL, so the extra
 // permission is the only thing that can authorise them.
@@ -906,40 +1086,48 @@ ipcMain.handle('cash-deleteEntry', (_, table, id) => {
   return { success: true };
 });
 
+// Deletes the cash rows an operation wrote and rebuilds the running balances
+// behind them. Shared: the cash page calls it through the IPC handler and the
+// returns cleanup calls it inside its own transaction, so a deleted return
+// invoice and its money move together.
+function deleteCashByReference(ref) {
+  const reference = String(ref || '');
+  if (!reference) return [];
+  const touched = [];
+  for (const [t] of [['drawer_log'], ['treasury_log']]) {
+    const rows = db.all(`SELECT * FROM ${t} WHERE reference_id = ?`, [reference]);
+    if (!rows.length) continue;
+    db.run(`DELETE FROM ${t} WHERE reference_id = ?`, [reference]);
+    const byType = {};
+    for (const r of rows) {
+      const key = t === 'drawer_log' ? r.drawer_type : '_all';
+      (byType[key] = byType[key] || []).push(r);
+    }
+    for (const [key, group] of Object.entries(byType)) {
+      let bal = 0;
+      const firstId = group[0].id;
+      const before = db.get(t === 'drawer_log'
+        ? `SELECT amount FROM ${t} WHERE drawer_type = ? AND id < ? ORDER BY id DESC LIMIT 1`
+        : `SELECT amount FROM ${t} WHERE id < ? ORDER BY id DESC LIMIT 1`, t === 'drawer_log' ? [key, firstId] : [firstId]);
+      bal = before ? Number(before.amount) : 0;
+      const rest = db.all(t === 'drawer_log'
+        ? `SELECT id, amount FROM ${t} WHERE drawer_type = ? AND id > ? ORDER BY id`
+        : `SELECT id, amount FROM ${t} WHERE id > ? ORDER BY id`, t === 'drawer_log' ? [key, group[group.length - 1].id] : [group[group.length - 1].id]);
+      for (const r of rest) {
+        db.run(`UPDATE ${t} SET balance = ? WHERE id = ?`, [bal, r.id]);
+        bal += Number(r.amount);
+      }
+    }
+    touched.push(`${t}:${rows.length}`);
+  }
+  return touched;
+}
+
 // --- deleting a whole operation by its reference (returns cleanup) ---
 ipcMain.handle('cash-deleteByReference', (_, referenceId) => {
   const ref = String(referenceId || '');
   if (!ref) throw new Error('مرجع غير صالح');
-  const touched = [];
-  db.transaction(() => {
-    for (const [t, act] of [['drawer_log', 'drawer'], ['treasury_log', 'treasury']]) {
-      const rows = db.all(`SELECT * FROM ${t} WHERE reference_id = ?`, [ref]);
-      if (!rows.length) continue;
-      db.run(`DELETE FROM ${t} WHERE reference_id = ?`, [ref]);
-      // rebuild the affected chains
-      const byType = {};
-      for (const r of rows) {
-        const key = t === 'drawer_log' ? r.drawer_type : '_all';
-        (byType[key] = byType[key] || []).push(r);
-      }
-      for (const [key, group] of Object.entries(byType)) {
-        let bal = 0;
-        const firstId = group[0].id;
-        const before = db.get(t === 'drawer_log'
-          ? `SELECT amount FROM ${t} WHERE drawer_type = ? AND id < ? ORDER BY id DESC LIMIT 1`
-          : `SELECT amount FROM ${t} WHERE id < ? ORDER BY id DESC LIMIT 1`, t === 'drawer_log' ? [key, firstId] : [firstId]);
-        bal = before ? Number(before.amount) : 0;
-        const rest = db.all(t === 'drawer_log'
-          ? `SELECT id, amount FROM ${t} WHERE drawer_type = ? AND id > ? ORDER BY id`
-          : `SELECT id, amount FROM ${t} WHERE id > ? ORDER BY id`, t === 'drawer_log' ? [key, group[group.length - 1].id] : [group[group.length - 1].id]);
-        for (const r of rest) {
-          db.run(`UPDATE ${t} SET balance = ? WHERE id = ?`, [bal, r.id]);
-          bal += Number(r.amount);
-        }
-      }
-      touched.push(`${t}:${rows.length}`);
-    }
-  });
+  const touched = db.transaction(() => deleteCashByReference(ref));
   return { success: true, removed: touched };
 });
 
@@ -975,7 +1163,6 @@ ipcMain.handle('invoice-cancel', (_, id) => {
       syncContainers(productId);
     }
   }
-
   const dtMap = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
   const reversals = [];
   if (sale.payment_breakdown) {
@@ -993,12 +1180,20 @@ ipcMain.handle('invoice-cancel', (_, id) => {
     for (const [type, amount] of reversals) recordDrawer(u.id, type, amount, 'إلغاء فاتورة ' + sale.invoice_number);
     const items = db.all('SELECT product_id, quantity FROM sale_items WHERE sale_id = ?', [saleId]);
     for (const item of items) adjustStock(item.product_id, item.quantity);
-    const rets = db.all('SELECT id, product_id, quantity, destination FROM returns WHERE sale_id = ?', [saleId]);
+    const rets = db.all('SELECT id, product_id, quantity, destination, document_id FROM returns WHERE sale_id = ?', [saleId]);
     for (const r of rets) {
       if (r.destination === 'مخزون') adjustStock(r.product_id, -r.quantity);
       else if (r.destination === 'مصنع') adjustStock(r.product_id, r.quantity);
       db.run('DELETE FROM returns WHERE id = ?', [r.id]);
     }
+    // The return invoices have to go as well, together with the money they moved.
+    // Deleting only the lines left the header row and its cash row behind, so
+    // cancelling a sale still left a "return" pointing at nothing.
+    for (const did of new Set(rets.map(r => r.document_id).filter(v => v))) {
+      deleteCashByReference('returndoc:' + did);
+      db.run('DELETE FROM return_documents WHERE id = ?', [did]);
+    }
+    for (const r of rets) deleteCashByReference('return:' + r.id);
     db.run('DELETE FROM sales WHERE id = ?', [saleId]);
   });
 

@@ -38,7 +38,7 @@
       </div>
       <div class="table-container">
         <table>
-          <thead><tr><th>رقم الفاتورة</th><th>النوع</th><th>المنتج</th><th>الكمية</th><th>المبلغ</th><th>السبب</th><th>التاريخ</th><th>الإجراءات</th></tr></thead>
+          <thead><tr><th style="width:26px;"></th><th>رقم المرتجع</th><th>الفاتورة المصدر</th><th>النوع</th><th>الأصناف</th><th>الإجمالي</th><th>المبلغ النقدي</th><th>السبب</th><th>التاريخ</th><th>الإجراءات</th></tr></thead>
           <tbody id="returnsTable"></tbody>
         </table>
       </div>
@@ -129,36 +129,14 @@
 
     let currentTab = 'sale';
     let currentSaleId = null;
-    let returnContainerLinks = {};
+
+    // Product names and free-text reasons go straight into innerHTML here, so
+    // they have to be escaped or a name containing a quote breaks the row.
+    function esc(v) {
+      if (v === null || v === undefined) return '';
+      return String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
     let allProducts = [];
-
-    async function loadReturnCompositions() {
-      returnContainerLinks = {};
-      const links = await window.api.db.all("SELECT * FROM product_compositions");
-      for (const l of links) returnContainerLinks[l.container_id] = { unitId: l.unit_id, unitsPerContainer: l.units_per_container };
-    }
-
-    async function syncReturnContainerStock(unitId) {
-      for (const cid of Object.keys(returnContainerLinks)) {
-        const link = returnContainerLinks[cid];
-        if (link.unitId === unitId) {
-          const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [unitId]);
-          const derived = Math.floor((unit ? unit.stock : 0) / link.unitsPerContainer);
-          await window.api.db.run("UPDATE products SET stock = ? WHERE id = ?", [derived, cid]);
-        }
-      }
-    }
-
-    async function adjustReturnStock(productId, qtyDelta) {
-      const link = returnContainerLinks[productId];
-      if (link) {
-        await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta * link.unitsPerContainer, link.unitId]);
-        await syncReturnContainerStock(link.unitId);
-      } else {
-        await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta, productId]);
-        await syncReturnContainerStock(productId);
-      }
-    }
 
     function switchTab(tab) {
       currentTab = tab;
@@ -169,21 +147,78 @@
       loadReturns();
     }
 
+    // One row per return invoice. The lines used to be listed one by one, so
+    // returning three items looked like three unrelated returns with no shared
+    // number and no shared total.
     async function loadReturns() {
-      const typeWhere = currentTab === 'purchase' ? "type='purchase'" : "(type IS NULL OR type='sale')";
-      const total = await window.api.db.get(`SELECT COALESCE(SUM(amount),0) as total FROM returns WHERE ${typeWhere}`);
-      const count = await window.api.db.get(`SELECT COUNT(*) as count FROM returns WHERE ${typeWhere}`);
-      document.getElementById('totalReturns').textContent = Number(total.total).toLocaleString();
-      document.getElementById('returnCount').textContent = count.count;
-      const typeSql = currentTab === 'purchase' ? "r.type='purchase'" : "(r.type IS NULL OR r.type='sale')";
-      const rows = await window.api.db.all(`SELECT r.*, p.name as product_name FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE ${typeSql} ORDER BY r.created_at DESC`);
-      document.getElementById('returnsTable').innerHTML = rows.map(r => {
-        const typeLabel = r.type === 'purchase' ? '<span style="color:var(--info)">مشتريات</span>' : '<span style="color:var(--warning)">مبيعات</span>';
-        return `<tr><td>${r.sale_invoice}</td><td>${typeLabel}</td><td>${r.product_name || '-'}</td>
-          <td>${r.quantity}</td><td style="color:var(--danger)">${Number(r.amount).toLocaleString()}</td>
-          <td>${r.reason || '-'}</td><td>${r.created_at}</td>
-          <td class="actions">${window.can('returns','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteReturn(${r.id})">حذف</button>` : ''}</td></tr>`;
+      const isPurchase = currentTab === 'purchase';
+      const docs = await window.api.db.all(
+        `SELECT * FROM return_documents WHERE type = ? ORDER BY created_at DESC, id DESC`, [isPurchase ? 'purchase' : 'sale']);
+      const lines = await window.api.db.all(
+        `SELECT r.id, r.document_id, r.product_id, r.quantity, r.amount, r.debt_reduced, p.name AS product_name
+         FROM returns r LEFT JOIN products p ON p.id = r.product_id
+         WHERE r.document_id IS NOT NULL ORDER BY r.id`);
+      const byDoc = {};
+      for (const l of lines) (byDoc[l.document_id] = byDoc[l.document_id] || []).push(l);
+
+      document.getElementById('totalReturns').textContent = Number(docs.reduce((s, d) => s + Number(d.total || 0), 0)).toLocaleString();
+      document.getElementById('returnCount').textContent = docs.length;
+
+      if (!docs.length) {
+        document.getElementById('returnsTable').innerHTML =
+          '<tr><td colspan="10" style="text-align:center;color:var(--text-secondary);padding:16px;">لا توجد مرتجعات</td></tr>';
+        return;
+      }
+      const cashLabel = (d) => !Number(d.cash_amount) ? '-'
+        : `${Number(d.cash_amount).toLocaleString()} ${d.cash_pool === 'drawer' ? 'من الدرج' : 'من الخزينة'}`;
+
+      document.getElementById('returnsTable').innerHTML = docs.map(d => {
+        const items = byDoc[d.id] || [];
+        const qty = items.reduce((s, l) => s + Number(l.quantity || 0), 0);
+        const typeLabel = d.type === 'purchase'
+          ? '<span style="color:var(--info)">مشتريات</span>'
+          : '<span style="color:var(--warning)">مبيعات</span>';
+        const debt = Number(d.debt_reduced || 0) > 0
+          ? `<div style="font-size:11px;color:var(--success);">خصم من المديونية ${Number(d.debt_reduced).toLocaleString()}</div>` : '';
+        const rows = items.map(l => `<tr style="background:var(--bg);">
+            <td></td>
+            <td colspan="9" style="padding:0;">
+              <table style="margin:6px 10px 6px 0;width:calc(100% - 20px);">
+                <thead><tr><th>المنتج</th><th>الكمية</th><th>المبلغ</th><th style="text-align:right;">السبب</th></tr></thead>
+                <tbody>${items.map(i => `<tr>
+                  <td>${esc(i.product_name) || '-'}</td>
+                  <td>${i.quantity}</td>
+                  <td>${Number(i.amount).toLocaleString()}</td>
+                  <td style="font-size:11px;color:var(--text-secondary);">${esc(i.debt_reduced) && Number(i.debt_reduced) > 0 ? 'خصم ' + Number(i.debt_reduced).toLocaleString() : ''}</td>
+                </tr>`).join('')}</tbody>
+                <tfoot><tr><td><b>الإجمالي</b></td><td><b>${qty}</b></td>
+                  <td><b>${Number(d.total).toLocaleString()}</b></td><td></td></tr></tfoot>
+              </table>
+            </td></tr>`).join('');
+        return `<tr style="cursor:pointer;" onclick="toggleReturnDetail(${d.id})">
+            <td style="text-align:center;" id="arrow-${d.id}">▸</td>
+            <td><b>${esc(d.return_number) || '-'}</b></td>
+            <td>${esc(d.source_invoice) || '-'}</td>
+            <td>${typeLabel}</td>
+            <td>${items.length} صنف (${qty} قطعة)</td>
+            <td style="color:var(--danger);font-weight:700;">${Number(d.total).toLocaleString()}</td>
+            <td>${cashLabel(d)}</td>
+            <td>${esc(d.reason) || '-'}</td>
+            <td>${esc(d.created_at)}</td>
+            <td class="actions" onclick="event.stopPropagation()">
+              ${window.can('returns','d') ? `<button class="btn btn-sm btn-danger" onclick="deleteReturn(${d.id})">حذف الفاتورة</button>` : ''}
+            </td></tr>
+          <tr id="detail-${d.id}" style="display:none;"><td colspan="10" style="padding:0;border-bottom:2px solid var(--border);">${rows}${debt ? `<div style="padding:4px 10px 8px 0;font-size:12px;">${debt}</div>` : ''}</td></tr>`;
       }).join('');
+    }
+
+    function toggleReturnDetail(id) {
+      const el = document.getElementById('detail-' + id);
+      const arrow = document.getElementById('arrow-' + id);
+      if (!el) return;
+      const open = el.style.display === 'none';
+      el.style.display = open ? '' : 'none';
+      if (arrow) arrow.textContent = open ? '▾' : '▸';
     }
 
     // ====== Sale Returns ======
@@ -408,44 +443,37 @@
       if (choice === 'cancel' || !choice) return;
 
       const sale = await window.api.db.get("SELECT id, invoice_number, remaining_amount FROM sales WHERE id=?", [currentSaleId]);
-      let debtToReduce = 0;
-      let cashTo = choice; // 'drawer' | 'treasury' | 'debt' (الباقي عند 'debt' بيروح الدرج)
-      if (choice === 'debt') {
-        if (sale.remaining_amount < totalAmount) {
-          const rest = totalAmount - sale.remaining_amount;
-          const debtTxt = Number(sale.remaining_amount).toLocaleString();
-          if (sale.remaining_amount <= 0) {
-            if (!await window.showConfirm(`مفيش مديونية على فاتورة ${sale.invoice_number}.<br>المبلغ كله (${totalAmount.toLocaleString()}) هيتصرف من الدرج ككاش للعميل. متابعة؟`)) return;
-          } else {
-            if (!await window.showConfirm(`مديونية فاتورة ${sale.invoice_number} هي ${debtTxt} بس، والمبلغ ${totalAmount.toLocaleString()}.<br>نخصم ${debtTxt} والباقي ${rest.toLocaleString()} يتصرف من الدرج للعميل. متابعة؟`)) return;
-          }
+      // Preview only: the real split between the customer debt and the cash paid
+      // out is decided inside the transaction in main.js.
+      if (choice === 'debt' && sale.remaining_amount < totalAmount) {
+        const rest = totalAmount - sale.remaining_amount;
+        const debtTxt = Number(sale.remaining_amount).toLocaleString();
+        if (sale.remaining_amount <= 0) {
+          if (!await window.showConfirm(`مفيش مديونية على فاتورة ${sale.invoice_number}.<br>المبلغ كله (${totalAmount.toLocaleString()}) هيتصرف من الدرج ككاش للعميل. متابعة؟`)) return;
+        } else {
+          if (!await window.showConfirm(`مديونية فاتورة ${sale.invoice_number} هي ${debtTxt} بس، والمبلغ ${totalAmount.toLocaleString()}.<br>نخصم ${debtTxt} والباقي ${rest.toLocaleString()} يتصرف من الدرج للعميل. متابعة؟`)) return;
         }
-        debtToReduce = Math.max(0, Math.min(totalAmount, sale.remaining_amount));
-        cashTo = 'drawer';
       }
 
       const baseReason = document.getElementById('returnReason').value;
-      const cashReason = choice === 'debt' ? `إرجاع مبيعات - خصم من فاتورة ${sale.invoice_number}` : `إرجاع مبيعات - صرف ${choice === 'drawer' ? 'من الدرج' : 'من الخزينة'}`;
-      for (const s of selectedSaleReturns) {
-        const lineAmount = s.price * s.qty;
-        const res = await window.api.db.run("INSERT INTO returns (type, sale_id, sale_invoice, product_id, quantity, amount, reason, destination, user_id) VALUES ('sale',?,?,?,?,?,?,?,?)", [sale.id, sale.invoice_number, s.id, s.qty, lineAmount, baseReason, 'مخزون', user.id]);
-        await adjustReturnStock(s.id, s.qty);
-        const share = totalAmount > 0 ? debtToReduce * (lineAmount / totalAmount) : 0;
-        await window.api.db.run("UPDATE returns SET debt_reduced = ? WHERE id = ?", [share, res.lastInsertRowid]);
-        const lineCash = lineAmount - share;
-        if (lineCash > 0) {
-          const ref = `return:${res.lastInsertRowid}`;
-          if (cashTo === 'drawer') await window.api.cash.addDrawerEntry('نقدي', -lineCash, cashReason, ref);
-          else await window.api.cash.addTreasuryEntry(-lineCash, cashReason, ref);
-        }
-      }
-      if (debtToReduce > 0) {
-        await window.api.db.run('UPDATE sales SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtToReduce, sale.id]);
-      }
-      const cashAmount = totalAmount - debtToReduce;
+      // One call for the whole basket: main.js runs the lines, the stock, the
+      // debt split and the money movement inside a single transaction, so a
+      // failure on the third line can no longer leave the first two committed
+      // with no matching cash entry.
+      const res = await window.api.ops.createReturn({
+        type: 'sale',
+        saleId: currentSaleId,
+        reason: baseReason,
+        destination: choice,
+        items: selectedSaleReturns.map(s => ({ productId: s.id, qty: s.qty, price: s.price }))
+      });
       closeModal('returnModal');
       loadReturns();
-      window.showAlert(debtToReduce > 0 ? `تم خصم ${debtToReduce.toLocaleString()} من مديونية العميل` + (cashAmount > 0 ? ` وصرف ${cashAmount.toLocaleString()} كاش من الدرج` : '') : `تم إرجاع ${totalAmount.toLocaleString()} وصرفها من ${cashTo === 'drawer' ? 'الدرج' : 'الخزينة'}`);
+      window.showAlert(
+        Number(res.debtReduced) > 0
+          ? `تم إرجاع ${Number(res.total).toLocaleString()} بفاتورة ${res.returnNumber}\nوخصم ${Number(res.debtReduced).toLocaleString()} من مديونية العميل` +
+            (Number(res.cashAmount) > 0 ? ` وصرف ${Number(res.cashAmount).toLocaleString()} كاش من الدرج` : '')
+          : `تم إرجاع ${Number(res.total).toLocaleString()} بفاتورة ${res.returnNumber} وصرفها من ${res.cashPool === 'drawer' ? 'الدرج' : 'الخزينة'}`);
     }
 
     // ====== Purchase Returns ======
@@ -694,8 +722,6 @@
       if (choice === 'cancel') return;
 
       let pu = null;
-      let debtToReduce = 0;
-      let toDrawer = false;
       if (choice === 'debt') {
         if (currentPurchaseId) pu = await window.api.db.get("SELECT * FROM purchases WHERE id=?", [currentPurchaseId]);
         if (!pu) pu = await pickOutstandingInvoice();
@@ -704,62 +730,38 @@
           const rest = totalAmount - pu.remaining_amount;
           if (!await window.showConfirm(`مديونية فاتورة ${pu.invoice_number} هي ${Number(pu.remaining_amount).toLocaleString()} بس، والمبلغ ${totalAmount.toLocaleString()}.<br>نخصم ${Number(pu.remaining_amount).toLocaleString()} والباقي ${rest.toLocaleString()} يذهب للخزينة. متابعة؟`)) return;
         }
-        debtToReduce = Math.min(totalAmount, pu.remaining_amount);
-      } else if (choice === 'drawer') {
-        toDrawer = true;
       }
 
-      const reason = pu && choice === 'debt' ? `إرجاع مشتريات - خصم من فاتورة ${pu.invoice_number}` : 'إرجاع مشتريات';
-      for (const s of selectedPurchaseReturns) {
-        const lineAmount = s.price * s.qty;
-        const res = await window.api.db.run("INSERT INTO returns (type, purchase_id, sale_invoice, product_id, quantity, amount, reason, destination, user_id) VALUES ('purchase',?,?,?,?,?,?,?,?)", [pu && choice === 'debt' ? pu.id : null, pu && choice === 'debt' ? pu.invoice_number : null, s.id, s.qty, lineAmount, 'إرجاع مشتريات', 'مورد', user.id]);
-        await adjustReturnStock(s.id, -s.qty);
-        const share = totalAmount > 0 ? debtToReduce * (lineAmount / totalAmount) : 0;
-        await window.api.db.run("UPDATE returns SET debt_reduced = ? WHERE id = ?", [share, res.lastInsertRowid]);
-        const lineCash = lineAmount - share;
-        if (lineCash > 0) {
-          if (toDrawer) await window.api.cash.addDrawerEntry('نقدي', lineCash, reason, `return:${res.lastInsertRowid}`);
-          else await window.api.cash.addTreasuryEntry(lineCash, reason, `return:${res.lastInsertRowid}`);
-        }
-      }
-      if (debtToReduce > 0) {
-        await window.api.db.run('UPDATE purchases SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtToReduce, pu.id]);
-      }
+      const res = await window.api.ops.createReturn({
+        type: 'purchase',
+        purchaseId: choice === 'debt' && pu ? pu.id : null,
+        reason: 'إرجاع مشتريات',
+        destination: choice,
+        items: selectedPurchaseReturns.map(s => ({ productId: s.id, qty: s.qty, price: s.price }))
+      });
       closeModal('purchaseReturnModal');
       loadReturns();
-      window.showAlert(choice === 'debt' ? `تم خصم ${debtToReduce.toLocaleString()} من مديونية فاتورة ${pu.invoice_number}` : `تم إرجاع ${totalAmount.toLocaleString()} إلى ${toDrawer ? 'الدرج' : 'الخزينة'}`);
+      window.showAlert(choice === 'debt'
+        ? `تم إرجاع ${Number(res.total).toLocaleString()} بفاتورة ${res.returnNumber} وخصم ${Number(res.debtReduced).toLocaleString()} من مديونية فاتورة ${pu.invoice_number}` +
+          (Number(res.cashAmount) > 0 ? ` والباقي ${Number(res.cashAmount).toLocaleString()} للخزينة` : '')
+        : `تم إرجاع ${Number(res.total).toLocaleString()} بفاتورة ${res.returnNumber} إلى ${choice === 'drawer' ? 'الدرج' : 'الخزينة'}`);
     }
 
-    async function deleteReturn(id) {
-      if (!await window.showConfirm('هل أنت متأكد؟')) return;
-      const r = await window.api.db.get("SELECT * FROM returns WHERE id=?", [id]);
-      if (r.type === 'purchase') {
-        await adjustReturnStock(r.product_id, r.quantity);
-        const debtReduced = r.debt_reduced || 0;
-        if (debtReduced > 0 && r.purchase_id) {
-          await window.api.db.run('UPDATE purchases SET remaining_amount = remaining_amount + ? WHERE id = ?', [debtReduced, r.purchase_id]);
-        }
-        if (r.amount - debtReduced > 0) {
-          // main owns cash-row cleanup so the running balances stay correct
-          await window.api.cash.deleteByReference(`return:${id}`);
-        }
-      } else {
-        await adjustReturnStock(r.product_id, -r.quantity);
-        const debtReduced = r.debt_reduced || 0;
-        if (debtReduced > 0 && r.sale_id) {
-          await window.api.db.run('UPDATE sales SET remaining_amount = remaining_amount + ? WHERE id = ?', [debtReduced, r.sale_id]);
-        }
-        if (r.amount - debtReduced > 0) {
-          // main owns cash-row cleanup so the running balances stay correct
-          await window.api.cash.deleteByReference(`return:${id}`);
-        }
-      }
-      await window.api.db.run('DELETE FROM returns WHERE id=?', [id]);
+    async function deleteReturn(documentId) {
+      const doc = await window.api.db.get("SELECT return_number, total FROM return_documents WHERE id=?", [documentId]);
+      if (!doc) return;
+      // Warns about the whole invoice now, not a single line: deleting used to
+      // take out one row and leave the rest of the return behind.
+      const lines = await window.api.db.all("SELECT COUNT(*) c, COALESCE(SUM(quantity),0) q FROM returns WHERE document_id=?", [documentId]);
+      if (!await window.showConfirm(
+        `حذف فاتورة المرتجع ${doc.return_number}؟\n` +
+        `${lines[0].c} صنف (${lines[0].q} قطعة) بإجمالي ${Number(doc.total).toLocaleString()}\n` +
+        'هترجع الكميات للمخزون، وهترجع المديونية، وهتتشال حركة النقد.')) return;
+      await window.api.ops.deleteReturnDoc(documentId);
       loadReturns();
     }
 
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-    loadReturnCompositions();
     loadReturns();
   </script>
   <script src="../js/sidebar.js"></script>

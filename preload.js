@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('api', {
   // Operations that own their table, so an extra permission is required.
   ops: {
     createSale: (payload) => ipcRenderer.invoke('pos-create-sale', payload),
+    createReturn: (payload) => ipcRenderer.invoke('returns-create', payload),
+    deleteReturnDoc: (documentId) => ipcRenderer.invoke('returns-delete', documentId),
     settleDebt: (party, payments, drawerBreakdown) => ipcRenderer.invoke('debt-settle', party, payments, drawerBreakdown),
     addDebtEntry: (customerId, amount, description) => ipcRenderer.invoke('debt-add-entry', customerId, amount, description),
     openShift: (startTime) => ipcRenderer.invoke('shift-open', startTime),

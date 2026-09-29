@@ -126,6 +126,26 @@ function createTables() {
       FOREIGN KEY (product_id) REFERENCES products(id)
     );
 
+    -- The header of a return. The returns table holds the lines; before this
+    -- table every line was a document of its own, so returning three items
+    -- produced three unrelated rows with no shared number and no shared total.
+    CREATE TABLE IF NOT EXISTS return_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_number TEXT,
+      type TEXT NOT NULL DEFAULT 'sale',
+      sale_id INTEGER,
+      purchase_id INTEGER,
+      source_invoice TEXT,
+      total REAL DEFAULT 0,
+      debt_reduced REAL DEFAULT 0,
+      cash_amount REAL DEFAULT 0,
+      cash_pool TEXT,
+      reason TEXT,
+      user_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS expenses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       description TEXT NOT NULL,
@@ -281,6 +301,14 @@ function createTables() {
   try { db.exec("ALTER TABLE sale_items ADD COLUMN buy_price REAL DEFAULT 0"); } catch(e) {}
   try { db.exec("UPDATE sale_items SET buy_price = (SELECT COALESCE(buy_price, 0) FROM products WHERE id = sale_items.product_id) WHERE buy_price IS NULL OR buy_price = 0"); } catch(e) {}
   try { db.exec("ALTER TABLE sale_items ADD COLUMN original_price REAL DEFAULT 0"); } catch(e) {}
+  // Grouping of return lines under one document. Rows written before this
+  // column existed keep working: they are folded into a document of their own
+  // below, and anything still unlinked is read as a single-line document.
+  try { db.exec("ALTER TABLE returns ADD COLUMN document_id INTEGER"); } catch(e) {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_returns_document ON returns(document_id)"); } catch(e) {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_returns_sale ON returns(sale_id)"); } catch(e) {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_return_documents_type ON return_documents(type, created_at)"); } catch(e) {}
+  backfillReturnDocuments();
   try { db.exec("ALTER TABLE promotion_products ADD COLUMN quantity INTEGER DEFAULT 1"); } catch(e) {}
   try { db.exec("ALTER TABLE products ADD COLUMN category_id INTEGER"); } catch(e) {}
   try { db.exec("ALTER TABLE shifts ADD COLUMN total_expenses REAL DEFAULT 0"); } catch(e) {}
@@ -355,6 +383,50 @@ function createTables() {
 
 function seedDefaults() {
   // No automatic seeding - setup page handles initial configuration
+}
+
+// Folds pre-document return lines into documents so the history list has the
+// same shape for old and new data. Lines written by the same operation share a
+// created_at to the second, so grouping on it recovers the original invoices
+// where possible and falls back to one document per line where not.
+function backfillReturnDocuments() {
+  const orphans = db.prepare("SELECT * FROM returns WHERE document_id IS NULL").all();
+  if (!orphans.length) return;
+  const groups = new Map();
+  for (const r of orphans) {
+    const key = [r.type || 'sale', r.sale_id || 0, r.purchase_id || 0, r.created_at || ''].join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  for (const [key, rows] of groups) {
+    const isPurchase = rows[0].type === 'purchase';
+    const prefix = isPurchase ? 'RET-P' : 'RET-S';
+    const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+    const debt = rows.reduce((s, r) => s + Number(r.debt_reduced || 0), 0);
+    // The cash rows of a legacy return were written per line, so the document
+    // only records the amount; the delete handler still cleans them up by the
+    // old per-line reference.
+    const cashAmount = Math.max(0, total - debt);
+    const cashPool = cashAmount > 0 ? (isPurchase ? 'treasury' : 'drawer') : null;
+    const seq = db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(return_number, 7) AS INTEGER)), 0) + 1 AS n FROM return_documents WHERE type = ?").get(isPurchase ? 'purchase' : 'sale').n;
+    const doc = db.prepare(
+      `INSERT INTO return_documents (return_number, type, sale_id, purchase_id, source_invoice, total, debt_reduced, cash_amount, cash_pool, reason, user_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      `${prefix}-${String(seq).padStart(5, '0')}`,
+      isPurchase ? 'purchase' : 'sale',
+      rows[0].sale_id || null,
+      rows[0].purchase_id || null,
+      rows[0].sale_invoice || null,
+      total, debt, cashAmount, cashPool,
+      rows[0].reason || '',
+      rows[0].user_id || null,
+      rows[0].created_at || null
+    );
+    for (const r of rows) {
+      db.prepare('UPDATE returns SET document_id = ? WHERE id = ?').run(doc.lastInsertRowid, r.id);
+    }
+  }
 }
 
 function getDefaultCurrency() {
