@@ -278,6 +278,13 @@
 
       const prod = allProducts.filter(p => p.barcode && String(p.barcode).toLowerCase() === ql);
       if (prod.length === 1) { addScannedSaleProduct(prod[0], input); return; }
+      if (prod.length > 1) {
+        chooseProductAmong(prod, (id) => {
+          const p = allProducts.find(x => x.id === id);
+          if (p) addScannedSaleProduct(p, input);
+        });
+        return;
+      }
 
       const sale = await window.api.db.get("SELECT id, invoice_number, customer_id, total_amount, paid_amount, remaining_amount FROM sales WHERE invoice_number = ? COLLATE NOCASE", [q]);
       if (sale) { await loadSaleInvoice(sale); input.value = ''; filterReturnList(); input.focus(); return; }
@@ -591,7 +598,13 @@
 
       const prod = allProducts.filter(p => p.barcode && p.barcode.toLowerCase() === ql);
       if (prod.length === 1) { addScannedProduct(prod[0], input); return; }
-      if (prod.length > 1) { renderPurchaseReturnList(); return; }
+      if (prod.length > 1) {
+        chooseProductAmong(prod, (id) => {
+          const p = allProducts.find(x => x.id === id);
+          if (p) addScannedProduct(p, input);
+        });
+        return;
+      }
 
       const pu = await window.api.db.get("SELECT id, invoice_number, supplier_id, total_amount, paid_amount, remaining_amount FROM purchases WHERE invoice_number = ? COLLATE NOCASE", [q]);
       if (pu) { await loadPurchaseInvoice(pu); input.value = ''; filterPurchaseReturnProducts(); input.focus(); return; }
@@ -801,13 +814,61 @@
       loadReturns();
     }
 
+    // Barcode is not unique (the UNIQUE constraint was dropped in a migration),
+    // so two products can share one. Scanning then has to ask which one was
+    // meant instead of quietly taking the first match.
+    let dupPickCallback = null;
+
+    function productLabel(p) {
+      const bits = [];
+      if (p.size) bits.push('مقاس ' + p.size);
+      if (p.color) bits.push(p.color);
+      if (p.barcode) bits.push('باركود ' + p.barcode);
+      return bits.join(' · ');
+    }
+
+    function chooseProductAmong(matches, onPick, title) {
+      dupPickCallback = onPick;
+      document.getElementById('dupTitle').textContent = title || `أكثر من منتج بنفس الباركود (${matches.length})`;
+      document.getElementById('dupList').innerHTML = matches.map(p => {
+        // The id is always shown: two rows can otherwise look identical when the
+        // products share a name and a barcode, and the id is the only thing that
+        // tells them apart.
+        const meta = [`#${p.id}`, productLabel(p)].filter(Boolean).join(' · ');
+        return `
+        <div style="display:flex;align-items:center;gap:8px;padding:9px;border-bottom:1px solid var(--border);cursor:pointer;"
+             onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"
+             onclick="dupChoose(${p.id})">
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:13px;">${esc(p.name)}</div>
+            <div style="font-size:11px;color:var(--text-secondary);">${esc(meta)}</div>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);">📦 ${Number(p.stock) || 0}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--danger);">${Number(p.sell_price || 0).toLocaleString()}</div>
+        </div>`;
+      }).join('');
+      document.getElementById('dupProductModal').style.display = 'flex';
+    }
+
+    function dupChoose(id) {
+      const cb = dupPickCallback;
+      dupPickCallback = null;
+      closeModal('dupProductModal');
+      if (cb) cb(id);
+    }
+
+    function dupCancel() { dupPickCallback = null; closeModal('dupProductModal'); }
+
     // ====== Quick return: no source invoice ======
     // The cashier scans the goods, types how many, and says where the money
     // goes. There is no sale to settle against, so a customer debt cannot be
     // reduced here (the server refuses that); the stock is credited either way.
     let quickReturnItems = [];
 
-    function showQuickReturnModal() {
+    async function showQuickReturnModal() {
+      // Refreshed on open like the other two modals, so a product added since
+      // the page loaded is still findable by barcode.
+      allProducts = await window.api.db.all("SELECT * FROM products ORDER BY name");
       quickReturnItems = [];
       document.getElementById('quickProductSearch').value = '';
       document.getElementById('quickProductResults').style.display = 'none';
@@ -838,10 +899,29 @@
       const list = (exact.length ? exact : rest).slice(0, 40);
       if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
       box.style.display = 'block';
-      box.innerHTML = list.map(p => `<div style="padding:6px 9px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
+      box.innerHTML = list.map(p => `<div data-id="${p.id}" style="padding:6px 9px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
           onmousedown="quickPickProduct(${p.id})">
-          ${esc(p.name)} <span style="color:var(--text-secondary);font-size:11px;">| باركود ${esc(p.barcode) || '-'} | رصيد ${p.stock}</span>
+          ${esc(p.name)} <span style="color:var(--text-secondary);font-size:11px;">| ${esc(productLabel(p)) || 'بدون باركود'} | رصيد ${p.stock}</span>
         </div>`).join('');
+    }
+
+    // Runs when the scanner hits Enter. Picking the first dropdown row here is
+    // what silently chose the wrong product when a barcode was shared, so an
+    // exact barcode match only auto-adds when it is the only one.
+    function quickCommitSearch() {
+      const input = document.getElementById('quickProductSearch');
+      const ql = input.value.trim().toLowerCase();
+      if (!ql) return;
+      const exact = allProducts.filter(p => p.barcode && String(p.barcode).toLowerCase() === ql);
+      if (exact.length === 1) { quickPickProduct(exact[0].id); return; }
+      if (exact.length > 1) {
+        document.getElementById('quickProductResults').style.display = 'none';
+        chooseProductAmong(exact, (id) => quickPickProduct(id));
+        return;
+      }
+      // Not a barcode: only take the row when the search narrowed to one.
+      const rows = document.querySelectorAll('#quickProductResults [data-id]');
+      if (rows.length === 1) quickPickProduct(Number(rows[0].dataset.id));
     }
 
     function quickPickProduct(id) {
@@ -1036,7 +1116,7 @@
         <label>المنتج (باركود أو اسم)</label>
         <input type="text" id="quickProductSearch" class="form-input" placeholder="امسح الباركود أو ابحث بالاسم" autocomplete="off"
                oninput="quickSearchProducts(this.value)"
-               onkeydown="if (event.key === 'Enter') { const r = document.querySelector('#quickProductResults div'); if (r) r.dispatchEvent(new MouseEvent('mousedown')); }">
+               onkeydown="if (event.key === 'Enter') { event.preventDefault(); quickCommitSearch(); }">
         <div id="quickProductResults" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:4px;display:none;"></div>
       </div>
 
@@ -1074,6 +1154,19 @@
       <div style="display:flex;gap:8px;">
         <button class="btn btn-primary" style="flex:1;" onclick="submitQuickReturn()">تأكيد الرجّع</button>
         <button class="btn" onclick="closeModal('quickReturnModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="dupProductModal" class="modal-overlay" style="display:none;z-index:1500;">
+    <div class="modal" style="max-width:560px;">
+      <h2 id="dupTitle">أكثر من منتج بنفس الباركود</h2>
+      <p style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px;">
+        الباركود مش فريد، فممكن أكتر من منتج يشاركوا نفس الرقم. اختار الصنف الصح.
+      </p>
+      <div id="dupList" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn" style="flex:1;" onclick="dupCancel()">إلغاء</button>
       </div>
     </div>
   </div>
