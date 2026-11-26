@@ -249,7 +249,10 @@ function createWindow(userDir) {
     // not loading it also covers a hard kill, where before-quit never runs and a
     // session file would otherwise survive on disk.
 
-    const setupDone = db.getSetting('shop_name');
+    // A shop name alone is not enough: an interrupted setup can leave settings
+    // behind without an admin (or vice versa). Only call setup done when both
+    // halves exist, otherwise the wizard is the only way back in.
+    const setupDone = !!db.getSetting('shop_name') && !isFirstRun();
     // If we still have a valid session we go straight in; otherwise login.
     const target = setupDone ? (currentUser() ? 'pos.html' : 'login.html') : 'setup.html';
     mainWindow.loadFile(path.join(__dirname, 'src', 'pages', target));
@@ -328,8 +331,10 @@ ipcMain.handle('auth-me', () => {
 });
 
 ipcMain.handle('auth-checkSetup', () => {
-  // Same signal main.js uses to pick the landing page.
-  return !!db.getSetting('shop_name');
+  // Same signal main.js uses to pick the landing page. A shop name without an
+  // admin (or an admin without a shop name) is a half-finished setup, not a
+  // finished one.
+  return !!db.getSetting('shop_name') && !isFirstRun();
 });
 
 // Auth handlers that back a form should report failures instead of throwing,
@@ -340,20 +345,61 @@ function adminGate() {
 }
 
 ipcMain.handle('auth-createAdmin', (_, username, password, fullName) => {
-  // Allowed only while the shop has no users (first run). After that, creating or
-  // overwriting an admin requires an existing admin session.
-  if (!isFirstRun()) { const g = adminGate(); if (g.error) return g.error; }
-  if (!validUsername(username) || !validPassword(password) || !String(fullName || '').trim()) {
-    return { success: false, message: 'بيانات غير صالحة (اليوزر 3 أحرف على الأقل، والباسورد 4 على الأقل)' };
+  const uname = String(username || '').trim();
+  const name = String(fullName || '').trim();
+  const invalid = !validUsername(uname) || !validPassword(password) || !name;
+  const invalidMsg = 'بيانات غير صالحة (اليوزر 3 أحرف على الأقل، والباسورد 4 على الأقل)';
+
+  // First run: create the admin and open a session for it. The setup wizard
+  // writes its settings right after this call, and those writes go through
+  // requireAuth(). Without the session the very first save fails with
+  // "session expired" and the wizard can never finish. The password was just
+  // chosen by the user, so treating this as a login is safe.
+  if (isFirstRun()) {
+    if (invalid) return { success: false, message: invalidMsg };
+    const hash = bcrypt.hashSync(password, 10);
+    const info = db.run('INSERT INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)', [uname, hash, 'admin', name]);
+    sessionUserId = Number(info.lastInsertRowid);
+    persistSession();
+    return { success: true };
   }
-  const existing = db.get("SELECT id FROM users WHERE role = 'admin'");
-  const hash = bcrypt.hashSync(password, 10);
-  if (existing) {
-    db.run('UPDATE users SET username = ?, password = ?, full_name = ? WHERE id = ?', [username, hash, fullName, existing.id]);
-  } else {
-    db.run('INSERT INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)', [username, hash, 'admin', fullName]);
+
+  const u = currentUser();
+  if (u && u.role === 'admin') {
+    // An existing admin session may create or overwrite the admin account.
+    if (invalid) return { success: false, message: invalidMsg };
+    const existing = db.get("SELECT id FROM users WHERE role = 'admin'");
+    const hash = bcrypt.hashSync(password, 10);
+    if (existing) {
+      db.run('UPDATE users SET username = ?, password = ?, full_name = ? WHERE id = ?', [uname, hash, name, existing.id]);
+    } else {
+      db.run('INSERT INTO users (username, password, role, full_name) VALUES (?, ?, ?, ?)', [uname, hash, 'admin', name]);
+    }
+    return { success: true };
   }
-  return { success: true };
+
+  // An interrupted setup leaves an admin row but no shop name. The app keeps
+  // sending the user back to the wizard, so let the wizard finish by proving it
+  // knows the existing admin password instead of demanding a session it cannot
+  // obtain from the setup page.
+  if (!db.getSetting('shop_name')) {
+    const rec = db.get("SELECT * FROM users WHERE role = 'admin' AND is_active = 1 ORDER BY id LIMIT 1");
+    let valid = false;
+    try { valid = !!rec && bcrypt.compareSync(String(password || ''), rec.password); } catch (e) { valid = false; }
+    if (!valid) return { success: false, message: 'كلمة مرور المدير غير صحيحة' };
+    try {
+      if (validUsername(uname) && name) {
+        db.run('UPDATE users SET username = ?, full_name = ? WHERE id = ?', [uname, name, rec.id]);
+      }
+    } catch (e) {
+      return { success: false, message: 'اسم المستخدم مستخدم بالفعل' };
+    }
+    sessionUserId = rec.id;
+    persistSession();
+    return { success: true };
+  }
+
+  return { success: false, message: 'غير مصرح - سجل دخول كمدير الأول' };
 });
 
 // ====== PERMISSION SCHEMA - single source of truth ======

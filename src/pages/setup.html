@@ -57,25 +57,35 @@
     document.getElementById('setupForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const errorDiv = document.getElementById('setupError');
+      const submitBtn = e.target.querySelector('button[type="submit"]');
+      errorDiv.style.display = 'none';
+      submitBtn.disabled = true;
 
-      const result = await window.api.auth.createAdmin(
-        document.getElementById('adminUser').value,
-        document.getElementById('adminPass').value,
-        document.getElementById('adminName').value
-      );
+      try {
+        const result = await window.api.auth.createAdmin(
+          document.getElementById('adminUser').value,
+          document.getElementById('adminPass').value,
+          document.getElementById('adminName').value
+        );
 
-      if (!result.success) {
-        errorDiv.textContent = result.message;
+        if (!result.success) {
+          errorDiv.textContent = result.message;
+          errorDiv.style.display = 'block';
+          return;
+        }
+
+        await window.api.db.setSetting('shop_name', document.getElementById('shopName').value);
+        await window.api.db.setSetting('shop_phone', document.getElementById('shopPhone').value);
+        await window.api.db.setSetting('printer_size', document.getElementById('printerSize').value);
+        await window.api.db.setSetting('telegram_token', document.getElementById('telegramToken').value);
+
+        window.location.href = 'login.html';
+      } catch (err) {
+        errorDiv.textContent = (err && err.message) ? err.message : 'تعذر حفظ الإعدادات. حاول تاني.';
         errorDiv.style.display = 'block';
-        return;
+      } finally {
+        submitBtn.disabled = false;
       }
-
-      await window.api.db.setSetting('shop_name', document.getElementById('shopName').value);
-      await window.api.db.setSetting('shop_phone', document.getElementById('shopPhone').value);
-      await window.api.db.setSetting('printer_size', document.getElementById('printerSize').value);
-      await window.api.db.setSetting('telegram_token', document.getElementById('telegramToken').value);
-
-      window.location.href = 'login.html';
     });
   </script>
 </body>
