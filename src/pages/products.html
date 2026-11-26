@@ -32,7 +32,7 @@
       </div>
       <div class="table-container">
         <table>
-          <thead><tr>          <th>حساب</th><th>الباركود</th><th>الاسم</th><th>التصنيف</th><th>سعر الشراء</th><th>سعر البيع</th><th>سعر الجملة</th><th>أقل سعر بيع</th><th>المخزون</th><th>الحد الأدنى</th><th>رأس المال</th><th>الإجراءات</th></tr></thead>
+          <thead><tr>          <th>حساب</th><th>الباركود</th><th>الاسم</th><th>التصنيف</th><th>الوحدة</th><th>سعر الشراء</th><th>سعر البيع</th><th>سعر الجملة</th><th>أقل سعر بيع</th><th>المخزون</th><th>الحد الأدنى</th><th>رأس المال</th><th>الإجراءات</th></tr></thead>
           <tbody id="productsTable"></tbody>
         </table>
       </div>
@@ -48,7 +48,18 @@
           <div class="form-group"><label>الباركود</label><input type="text" id="pBarcode"></div>
           <div class="form-group"><label>الاسم *</label><input type="text" id="pName" required></div>
         </div>
-        <div class="form-group"><label>التصنيف</label><select id="pCategory"> <option value="">بدون تصنيف</option></select></div>
+        <div class="form-row">
+          <div class="form-group"><label>التصنيف</label><select id="pCategory"> <option value="">بدون تصنيف</option></select></div>
+          <div class="form-group"><label>وحدة البيع *</label>
+            <select id="pUnit" onchange="onProductUnitChange()">
+              <option value="قطعة">قطعة</option>
+              <option value="كجم">كجم</option>
+              <option value="جم">جم</option>
+              <option value="لتر">لتر</option>
+              <option value="مل">مل</option>
+            </select>
+          </div>
+        </div>
         <div class="form-row">
           <div class="form-group"><label>سعر الشراء</label><input type="number" id="pBuyPrice" step="0.01"></div>
           <div class="form-group"><label>سعر البيع *</label><input type="number" id="pSellPrice" step="0.01" required></div>
@@ -75,6 +86,7 @@
     </div>
   </div>
   <script src="../js/pager.js"></script>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -108,8 +120,8 @@
       const unitIds = [...new Set(allProducts.map(p => compMap[p.id]).filter(Boolean).map(c => c.unit_id))];
       const unitStockMap = {};
       if (unitIds.length) {
-        const units = await window.api.db.all("SELECT id, stock FROM products WHERE id IN (" + unitIds.map(() => '?').join(',') + ")", unitIds);
-        for (const u of units) unitStockMap[u.id] = u.stock || 0;
+        const units = await window.api.db.all("SELECT id, stock, unit FROM products WHERE id IN (" + unitIds.map(() => '?').join(',') + ")", unitIds);
+        for (const u of units) unitStockMap[u.id] = { stock: u.stock || 0, unit: u.unit };
       }
 
       document.getElementById('productsTable').innerHTML = allProducts.map(p => {
@@ -117,24 +129,28 @@
         const comp = compMap[p.id];
         let stockDisplay;
         if (comp) {
-          const unitStock = unitStockMap[comp.unit_id] || 0;
-          const derivedStock = Math.floor(unitStock / comp.units_per_container);
-          stockDisplay = `<span style="color:var(--success);font-weight:700">${derivedStock}</span> <span style="font-size:10px;color:var(--text-secondary)">(= ${unitStock} وحدة)</span>`;
+          const unitInfo = unitStockMap[comp.unit_id] || { stock: 0, unit: 'قطعة' };
+          const derivedStock = Math.floor(unitInfo.stock / comp.units_per_container);
+          stockDisplay = `<span style="color:var(--success);font-weight:700">${derivedStock}</span> <span style="font-size:10px;color:var(--text-secondary)">(= ${Units.fullQty(unitInfo.stock, unitInfo.unit)})</span>`;
         } else {
-          stockDisplay = `<span style="color:${low?'var(--danger)':'inherit'}">${p.stock||0}</span>`;
+          const shown = p.unit && Units.isWeightUnit(p.unit)
+            ? Units.fullQty(p.stock, p.unit)
+            : (p.stock || 0);
+          stockDisplay = `<span style="color:${low?'var(--danger)':'inherit'}">${shown}</span>`;
         }
         return `<tr>
           <td style="text-align:center"><input type="checkbox" ${p.in_capital !== 0 ? 'checked' : ''} onchange="toggleInCapital(${p.id}, this.checked)"></td>
           <td>${p.barcode || '-'}</td>
           <td>${p.name} ${comp ? '<span style="font-size:10px;color:var(--warning)">📦</span>' : ''}</td>
           <td style="font-size:12px;color:var(--primary)">${p.category_name || '-'}</td>
+          <td>${Units.normalizeUnit(p.unit)}</td>
           <td>${Number(p.buy_price).toLocaleString()}</td>
           <td>${Number(p.sell_price).toLocaleString()}</td>
           <td>${Number(p.wholesale_price).toLocaleString()}</td>
           <td>${Number(p.min_sell_price).toLocaleString()}</td>
           <td>${stockDisplay}</td>
-          <td>${p.min_stock}</td>
-          <td style="font-weight:700;color:var(--primary)">${Number((p.stock||0) * (p.buy_price||0)).toLocaleString()}</td>
+          <td>${Units.fullQty(p.min_stock, p.unit)}</td>
+          <td style="font-weight:700;color:var(--primary)">${Units.roundMoney((p.stock||0) * (p.buy_price||0)).toLocaleString()}</td>
           <td class="actions">
             <button class="btn btn-sm btn-primary" onclick="editProduct(${p.id})" style="${window.can('products','e')?'':'display:none'}">تعديل</button>
             <button class="btn btn-sm btn-info" onclick="printBarcode(${p.id})" style="${window.can('products','e')?'':'display:none'}">🏷️</button>
@@ -145,21 +161,51 @@
     }
 
     async function loadUnitProductSelect(currentUnitId) {
-      const allProds = await window.api.db.all("SELECT id, name FROM products ORDER BY name");
+      const allProds = await window.api.db.all("SELECT id, name, unit FROM products ORDER BY name");
+      // A carton is a count of pieces, so only piece products can be its unit.
+      // The already-linked product is kept even if its unit changed, so editing
+      // an old container does not silently drop the link.
+      const candidates = allProds.filter(p => Units.isPiece(p.unit) || p.id == currentUnitId);
       const sel = document.getElementById('pCompUnitId');
-      sel.innerHTML = '<option value="">بدون ربط</option>' + allProds.map(p => `<option value="${p.id}" ${p.id == currentUnitId ? 'selected' : ''}>${p.name}</option>`).join('');
+      sel.innerHTML = '<option value="">بدون ربط</option>' + candidates.map(p => `<option value="${p.id}" ${p.id == currentUnitId ? 'selected' : ''}>${p.name}</option>`).join('');
+    }
+
+    function productUnitValue() {
+      return Units.normalizeUnit(document.getElementById('pUnit').value);
+    }
+
+    // The stock and minimum fields follow the chosen unit, and container links
+    // are hidden for anything sold by weight: a carton is a count of pieces.
+    function onProductUnitChange() {
+      const unit = productUnitValue();
+      document.getElementById('pStock').step = Units.qtyStep(unit);
+      document.getElementById('pMinStock').step = Units.qtyStep(unit);
+      const section = document.getElementById('compositionSection');
+      if (!Units.isPiece(unit)) {
+        section.style.display = 'none';
+        document.getElementById('pCompUnitId').value = '';
+        // A container's stock is derived from its unit and locked; switching to
+        // a weight unit drops the link, so the field has to be editable again.
+        const stockEl = document.getElementById('pStock');
+        stockEl.readOnly = false;
+        stockEl.style.background = '';
+        stockEl.title = '';
+      } else {
+        section.style.display = 'block';
+      }
     }
 
     async function showProductModal(editId) {
       document.getElementById('modalTitle').textContent = 'إضافة منتج';
       document.getElementById('productForm').reset();
       document.getElementById('productId').value = '';
-      document.getElementById('compositionSection').style.display = 'block';
+      document.getElementById('pUnit').value = Units.PIECE;
       document.getElementById('pCompUnitId').value = '';
       document.getElementById('pCompQty').value = '1';
       document.getElementById('pStock').readOnly = false;
       document.getElementById('pStock').style.background = '';
       document.getElementById('pStock').title = '';
+      onProductUnitChange();
       await loadUnitProductSelect(null);
       document.getElementById('productModal').style.display = 'flex';
     }
@@ -178,12 +224,13 @@
       document.getElementById('pStock').value = p.stock || 0;
       document.getElementById('pMinStock').value = p.min_stock;
       document.getElementById('pDescription').value = p.description || '';
-      document.getElementById('compositionSection').style.display = 'block';
+      document.getElementById('pUnit').value = Units.normalizeUnit(p.unit);
+      onProductUnitChange();
       const comp = await window.api.db.get("SELECT * FROM product_compositions WHERE container_id=?", [id]);
       await loadUnitProductSelect(comp ? comp.unit_id : null);
       document.getElementById('pCompUnitId').value = comp ? comp.unit_id : '';
       document.getElementById('pCompQty').value = comp ? comp.units_per_container : 1;
-      if (comp) {
+      if (comp && Units.isPiece(Units.normalizeUnit(p.unit))) {
         const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [comp.unit_id]);
         const derived = Math.floor((unit ? unit.stock : 0) / comp.units_per_container);
         document.getElementById('pStock').value = derived;
@@ -201,14 +248,22 @@
     document.getElementById('productForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = document.getElementById('productId').value;
-      const unitId = document.getElementById('pCompUnitId').value;
+      const sellUnit = productUnitValue();
+      // Containers only apply to counted pieces; a weight product never keeps a
+      // container link, even if the form still had one selected.
+      const unitId = Units.isPiece(sellUnit) ? document.getElementById('pCompUnitId').value : '';
       const compQty = parseInt(document.getElementById('pCompQty').value) || 1;
       const isContainer = !!unitId;
-      let stock = parseInt(document.getElementById('pStock').value) || 0;
+      let stock = Number(document.getElementById('pStock').value) || 0;
+      stock = Units.isPiece(sellUnit) ? Math.trunc(stock) : Units.roundQty(stock, sellUnit);
       if (isContainer) {
         const unit = await window.api.db.get("SELECT stock FROM products WHERE id=?", [unitId]);
         stock = Math.floor((unit ? unit.stock : 0) / compQty);
       }
+      const rawMinStock = Number(document.getElementById('pMinStock').value);
+      const minStock = rawMinStock > 0
+        ? (Units.isPiece(sellUnit) ? Math.trunc(rawMinStock) : Units.roundQty(rawMinStock, sellUnit))
+        : 5;
       const categoryId = document.getElementById('pCategory').value || null;
       const data = [
         document.getElementById('pBarcode').value,
@@ -219,37 +274,50 @@
         parseFloat(document.getElementById('pWholesalePrice').value) || 0,
         parseFloat(document.getElementById('pMinSellPrice').value) || 0,
         stock,
-        parseInt(document.getElementById('pMinStock').value) || 5,
-        document.getElementById('pDescription').value
+        minStock,
+        document.getElementById('pDescription').value,
+        sellUnit
       ];
 
       if (id) {
         const barcode = document.getElementById('pBarcode').value || ('P' + String(id).padStart(5, '0'));
         data[0] = barcode;
-        const old = await window.api.db.get("SELECT stock FROM products WHERE id=?", [id]);
+        const old = await window.api.db.get("SELECT stock, unit FROM products WHERE id=?", [id]);
+        // Changing the unit relabels stock and every past line for this
+        // product; the money already recorded does not move, but the cashier
+        // should still know before old invoices start reading differently.
+        if (old && Units.normalizeUnit(old.unit) !== sellUnit) {
+          const used = await window.api.db.get(
+            "SELECT (SELECT COUNT(*) FROM sale_items WHERE product_id=?) + (SELECT COUNT(*) FROM purchase_items WHERE product_id=?) + (SELECT COUNT(*) FROM returns WHERE product_id=?) AS c",
+            [id, id, id]);
+          const msg = `تغيير الوحدة من "${Units.normalizeUnit(old.unit)}" لـ "${sellUnit}" هيعيد تفسير رقم المخزون الحالي (${old.stock || 0}) كـ ${sellUnit}.` +
+            (used && used.c > 0 ? `\nوفيه ${used.c} حركة قديمة هيتغيّر عرض كمياتها في الفواتير.` : '') +
+            '\nالمبالغ المسجلة مش هتتغير. متابعة؟';
+          if (!await window.showConfirm(msg)) return;
+        }
         const increase = Math.max(0, stock - (old.stock||0));
         const buyPrice = parseFloat(document.getElementById('pBuyPrice').value) || 0;
         if (increase > 0 && buyPrice > 0 && !isContainer) {
-          const cost = increase * buyPrice;
+          const cost = Units.roundMoney(increase * buyPrice);
           if (await window.showConfirm(`هل تريد خصم ${cost.toLocaleString()} ${window.currencySymbol} من الخزينة مقابل زيادة المخزون؟`)) {
-            await window.api.cash.addTreasuryEntry(-cost, 'زيادة مخزون - ' + document.getElementById('pName').value + ' (' + increase + ' وحدة)');
+            await window.api.cash.addTreasuryEntry(-cost, 'زيادة مخزون - ' + document.getElementById('pName').value + ' (' + Units.fullQty(increase, sellUnit) + ')');
           }
         }
-        await window.api.db.run('UPDATE products SET barcode=?, name=?, category_id=?, buy_price=?, sell_price=?, wholesale_price=?, min_sell_price=?, stock=?, min_stock=?, description=? WHERE id=?', [...data, id]);
+        await window.api.db.run('UPDATE products SET barcode=?, name=?, category_id=?, buy_price=?, sell_price=?, wholesale_price=?, min_sell_price=?, stock=?, min_stock=?, description=?, unit=? WHERE id=?', [...data, id]);
         // Save composition link
         await window.api.db.run("DELETE FROM product_compositions WHERE container_id=?", [id]);
         if (unitId && compQty > 0) {
           await window.api.db.run("INSERT INTO product_compositions (container_id, unit_id, units_per_container) VALUES (?, ?, ?)", [id, unitId, compQty]);
         }
       } else {
-        const result = await window.api.db.run('INSERT INTO products (barcode, name, category_id, buy_price, sell_price, wholesale_price, min_sell_price, stock, min_stock, description) VALUES (?,?,?,?,?,?,?,?,?,?)', data);
+        const result = await window.api.db.run('INSERT INTO products (barcode, name, category_id, buy_price, sell_price, wholesale_price, min_sell_price, stock, min_stock, description, unit) VALUES (?,?,?,?,?,?,?,?,?,?,?)', data);
         if (!document.getElementById('pBarcode').value) {
           const genBarcode = 'P' + String(result.lastInsertRowid).padStart(5, '0');
           await window.api.db.run('UPDATE products SET barcode=? WHERE id=?', [genBarcode, result.lastInsertRowid]);
         }
         // Save composition link for new product
         const newId = result.lastInsertRowid || result.id;
-        const newUnitId = document.getElementById('pCompUnitId').value;
+        const newUnitId = Units.isPiece(sellUnit) ? document.getElementById('pCompUnitId').value : '';
         const newCompQty = parseInt(document.getElementById('pCompQty').value) || 1;
         if (newUnitId && newCompQty > 0) {
           await window.api.db.run("INSERT INTO product_compositions (container_id, unit_id, units_per_container) VALUES (?, ?, ?)", [newId, newUnitId, newCompQty]);
@@ -277,7 +345,7 @@
     }
 
     async function printBarcode(id) {
-      const p = await window.api.db.get("SELECT barcode, name, sell_price FROM products WHERE id=?", [id]);
+      const p = await window.api.db.get("SELECT barcode, name, sell_price, unit FROM products WHERE id=?", [id]);
       const code = p.barcode || ('P' + String(id).padStart(5, '0'));
       const win = window.open('', '_blank', 'width=250,height=100');
       win.document.write(`<html dir="ltr"><head><style>
@@ -288,7 +356,7 @@
         @media print{@page{margin:0;size:auto}body{margin:0;padding:0}}
         svg{max-width:200px;height:auto}
       </style></head><body><div class="label">
-        <div class="top"><span class="name">${p.name}</span><span class="price"> (${Number(p.sell_price).toLocaleString()} ${window.currencySymbol || 'ج.م'})</span></div>
+        <div class="top"><span class="name">${p.name}</span><span class="price"> (${Number(p.sell_price).toLocaleString()} ${window.currencySymbol || 'ج.م'}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''})</span></div>
         <svg id="barcode"></svg>
         <div style="height:6px"></div>
         <svg id="barcode2"></svg>

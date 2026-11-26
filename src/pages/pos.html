@@ -99,6 +99,7 @@
       <button class="btn btn-sm" onclick="closeSuspendedModal()" style="margin-top:12px;width:100%;">إغلاق</button>
     </div>
   </div>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -253,7 +254,7 @@
       overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
       let html = '<div class="modal" style="max-width:400px;text-align:center;"><h3 style="margin-bottom:12px;">اختر المنتج</h3>';
       matches.forEach((p, i) => {
-        html += `<div data-picker-id="${p.id}" style="padding:10px 14px;margin:4px 0;background:var(--bg);border-radius:8px;cursor:pointer;font-weight:600;border:1px solid var(--border);" onmouseover="this.style.background='var(--primary)';this.style.color='#fff'" onmouseout="this.style.background='var(--bg)';this.style.color='inherit'">${p.name} — ${Number(p.sell_price).toLocaleString()} ${window.currencySymbol} <span style="font-weight:400;font-size:11px;">📦 ${p.stock||0}</span></div>`;
+        html += `<div data-picker-id="${p.id}" style="padding:10px 14px;margin:4px 0;background:var(--bg);border-radius:8px;cursor:pointer;font-weight:600;border:1px solid var(--border);" onmouseover="this.style.background='var(--primary)';this.style.color='#fff'" onmouseout="this.style.background='var(--bg)';this.style.color='inherit'">${p.name} — ${Number(p.sell_price).toLocaleString()} ${window.currencySymbol}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''} <span style="font-weight:400;font-size:11px;">📦 ${Units.fullQty(p.stock, p.unit)}</span></div>`;
       });
       html += '<button class="btn" style="background:var(--border);margin-top:12px;width:100%;" onclick="this.closest(\'.modal-overlay\').remove()">إلغاء</button></div>';
       overlay.innerHTML = html;
@@ -285,9 +286,9 @@
           const badge = promo ? (promo.discount_type === 'percent' ? `${promo.discount_value}%-` : `${Number(promo.discount_value).toLocaleString()}${window.currencySymbol}-`) : '';
           return `<div class="product-item" onclick="addToCart(${p.id})">
             <div class="name">${p.name}</div>
-            <div class="price">${Number(p.sell_price).toLocaleString()} ${window.currencySymbol}</div>
+            <div class="price">${Number(p.sell_price).toLocaleString()} ${window.currencySymbol}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''}</div>
             ${promo ? `<div class="price" style="color:var(--danger);font-size:11px;">عرض ${badge}</div>` : ''}
-            <div class="stock">المخزون: ${p.stock}</div>
+            <div class="stock">المخزون: ${Units.fullQty(p.stock, p.unit)}</div>
           </div>`;
         }).join('');
       // Package promotions appear as separate purchasable tiles
@@ -321,6 +322,7 @@
 
     function addSingleProductToCart(p, { override = null } = {}) {
       const basePrice = override != null && override > 0 ? override : p.sell_price;
+      const unit = Units.unitOf(p);
       const existing = cart.find(x => x.key === `${p.id}`);
       const link = containerLinks[p.id];
       if (link) {
@@ -341,10 +343,18 @@
           return false;
         }
       }
+      const step = Units.qtyIncrement(unit);
       if (existing) {
-        existing.qty++;
+        const next = Units.roundQty(existing.qty + step, unit);
+        // A weight product can be sold in fractions, so a click that would pass
+        // the remaining stock is clamped to it instead of being refused.
+        if (next > p.stock && !Units.isPiece(unit)) existing.qty = Units.roundQty(p.stock, unit);
+        else existing.qty = next;
       } else {
-        cart.push({ key: `${p.id}`, id: p.id, name: p.name, barcode: p.barcode, price: basePrice, qty: 1, stock: p.stock, original_price: p.sell_price, buy_price: p.buy_price, manual_price: override != null && override > 0 });
+        const initialQty = Units.isPiece(unit)
+          ? 1
+          : Math.max(Units.minQty(unit), Math.min(step, Number(p.stock) || 0));
+        cart.push({ key: `${p.id}`, id: p.id, name: p.name, barcode: p.barcode, unit, price: basePrice, qty: initialQty, stock: p.stock, original_price: p.sell_price, buy_price: p.buy_price, manual_price: override != null && override > 0 });
       }
       return true;
     }
@@ -365,7 +375,22 @@
           return;
         }
       }
+      // Remember what was already in the cart: a weight product advances by its
+      // increment per click, so adding the package's required amount later has
+      // to be based on the quantity before the click, not after it.
+      const before = {};
+      for (const pid of Object.keys(needed)) {
+        const line = cart.find(x => x.key === `${pid}`);
+        before[pid] = line ? line.qty : 0;
+      }
       for (const it of items) addSingleProductToCart(it);
+      for (const pid of Object.keys(needed)) {
+        const it = products.find(x => x.id == pid);
+        const unit = Units.unitOf(it);
+        if (Units.isPiece(unit)) continue;
+        const line = cart.find(x => x.key === `${pid}`);
+        if (line) line.qty = Units.roundQty(Math.min(before[pid] + needed[pid], Number(it.stock) || 0), unit);
+      }
       recomputeLinePrices();
       renderCart();
     }
@@ -382,7 +407,7 @@
       }
       let discountAmount = best.discount_type === 'percent' ? basePrice * (best.discount_value / 100) : best.discount_value;
       discountAmount = Math.min(discountAmount, basePrice);
-      return Math.round((basePrice - discountAmount) * 100) / 100;
+      return Units.roundMoney(basePrice - discountAmount);
     }
 
     function addToCart(productId) {
@@ -418,6 +443,15 @@
         const saved = JSON.parse(localStorage.getItem('posCartState'));
         if (!saved || !saved.cart || saved.cart.length === 0) return;
         cart = saved.cart;
+        // A cart saved before products had a unit carries no unit field. Take
+        // the current unit from the product row so a weight product is not
+        // treated as a piece after a reload.
+        cart.forEach(it => {
+          const p = products.find(x => x.id === it.id);
+          if (p) it.unit = Units.unitOf(p);
+          it.unit = Units.normalizeUnit(it.unit);
+          it.qty = Units.roundQty(it.qty, it.unit);
+        });
         document.getElementById('discountAmount').value = saved.discountAmount || 0;
         if (saved.discountType) document.getElementById('discountType').value = saved.discountType;
         if (saved.invoiceDate) document.getElementById('invoiceDate').value = saved.invoiceDate;
@@ -446,10 +480,11 @@
         <span>${item.name}</span>
         <div class="qty-controls">
           <button onclick="changeQty(${i}, -1)">-</button>
-          <input type="number" value="${item.qty}" min="1" style="width:45px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:4px;font-size:13px;" onchange="updateCartQty(${i}, this.value)">
+          <input type="number" value="${Units.roundQty(item.qty, item.unit)}" min="${Units.minQty(item.unit)}" step="${Units.qtyStep(item.unit)}" style="width:60px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:4px;font-size:13px;" onchange="updateCartQty(${i}, this.value)">
+          ${Units.isWeightUnit(item.unit) ? `<span style="font-size:11px;color:var(--text-secondary);">${item.unit}</span>` : ''}
           <button onclick="changeQty(${i}, 1)">+</button>
           <input type="number" value="${item.price}" step="0.01" style="width:70px;text-align:center;font-size:12px;" onchange="updatePrice(${i}, this.value)">
-          <span>${(item.price * item.qty).toLocaleString()} ${window.currencySymbol}</span>
+          <span>${Units.formatMoney(item.price * item.qty)} ${window.currencySymbol}</span>
           ${item.original_price && item.original_price !== item.price ? `<span style="font-size:10px;color:var(--warning);">(<del>${item.original_price}</del>)</span>` : ''}
           <button onclick="removeFromCart(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;">✕</button>
         </div>
@@ -461,9 +496,11 @@
     function updateCartQty(i, val) {
       const item = cart[i];
       const p = products.find(x => x.id === item.id);
-      let qty = parseInt(val) || 1;
-      if (qty < 1) qty = 1;
-      if (p && qty > p.stock) qty = p.stock;
+      const unit = Units.normalizeUnit(item.unit);
+      let qty = Units.roundQty(val, unit);
+      if (!Number.isFinite(qty) || qty < Units.minQty(unit)) qty = Units.minQty(unit);
+      if (Units.isPiece(unit)) qty = Math.round(qty);
+      if (p && qty > p.stock) qty = Units.roundQty(p.stock, unit);
       item.qty = qty;
       recomputeLinePrices();
       renderCart();
@@ -483,10 +520,29 @@
       updateCartTotals();
     }
 
+    // The cart total is the sum of the rounded line totals, matching how the
+    // main process recomputes it. Rounding only the final sum would drift by a
+    // cent from the printed invoice on some fractional quantities.
+    function cartTotal() {
+      return Units.roundMoney(cart.reduce((sum, x) => sum + Units.roundMoney(x.price * x.qty), 0));
+    }
+
+    // Pieces are counted; weight cannot be summed with pieces into one number,
+    // so a mixed cart is described by how many lines it has.
+    function cartCountLabel() {
+      const units = new Set(cart.map(x => Units.normalizeUnit(x.unit)));
+      if (units.size === 1) {
+        const u = [...units][0];
+        const total = Units.roundQty(cart.reduce((sum, x) => sum + x.qty, 0), u);
+        return Units.isPiece(u) ? `${total} قطعة` : Units.fullQty(total, u);
+      }
+      // Pieces and kilograms cannot be added into one meaningful number.
+      return `${cart.length} صنف`;
+    }
+
     function updateCartTotals() {
-      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
-      const count = cart.reduce((sum, x) => sum + x.qty, 0);
-      document.getElementById('cartTotal').textContent = `🛒 ${count} قطعة | ${total.toLocaleString()} ${window.currencySymbol}`;
+      const total = cartTotal();
+      document.getElementById('cartTotal').textContent = `🛒 ${cartCountLabel()} | ${total.toLocaleString()} ${window.currencySymbol}`;
       const cashInput = document.querySelector('.payment-method-input[data-method="cash"]');
       const otherInputs = document.querySelectorAll('.payment-method-input:not([data-method="cash"])');
       const otherTotal = [...otherInputs].reduce((s, inp) => s + (parseFloat(inp.value) || 0), 0);
@@ -500,9 +556,10 @@
     function changeQty(i, delta) {
       const item = cart[i];
       const p = products.find(x => x.id === item.id);
-      item.qty += delta;
+      const unit = Units.normalizeUnit(item.unit);
+      item.qty = Units.roundQty(item.qty + delta * Units.qtyIncrement(unit), unit);
       if (item.qty <= 0) cart.splice(i, 1);
-      else if (item.qty > (p ? p.stock : item.qty)) item.qty = p ? p.stock : item.qty;
+      else if (item.qty > (p ? p.stock : item.qty)) item.qty = p ? Units.roundQty(p.stock, unit) : item.qty;
       recomputeLinePrices();
       renderCart();
     }
@@ -555,7 +612,7 @@
         const packs = countPackages(prom);
         if (packs <= 0) continue;
         const credit = packageUnitCredit(prom) * packs;
-        if (!best || credit > best.credit) best = { promo: prom, packs, credit: Math.round(credit * 100) / 100, appliedIds: prom.productIds };
+        if (!best || credit > best.credit) best = { promo: prom, packs, credit: Units.roundMoney(credit), appliedIds: prom.productIds };
       }
       return best || { promo: null, packs: 0, credit: 0, appliedIds: [] };
     }
@@ -570,7 +627,7 @@
         if (it.manual_price) return;
         const ref = it.original_price || it.price;
         let price = findIndividualEffectivePrice(products.find(x => x.id === it.id), ref);
-        it.price = Math.round(price * 100) / 100;
+        it.price = Units.roundMoney(price);
       });
       const { credit } = bestActivePackage();
       cartPackageDiscount = credit;
@@ -589,22 +646,21 @@
     function getDiscount() {
       const val = parseFloat(document.getElementById('discountAmount').value) || 0;
       const type = document.getElementById('discountType').value;
-      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const total = cartTotal();
       if (type === 'percent') {
-        const amount = total * (val / 100);
+        const amount = Units.roundMoney(total * (val / 100));
         return { amount, percent: val };
       }
       const pct = total > 0 ? (val / total * 100) : 0;
-      return { amount: val, percent: pct };
+      return { amount: Units.roundMoney(val), percent: pct };
     }
 
     function calcRemaining() {
-      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
-      const count = cart.reduce((sum, x) => sum + x.qty, 0);
-      document.getElementById('cartTotal').textContent = `🛒 ${count} قطعة | ${total.toLocaleString()} ${window.currencySymbol}`;
+      const total = cartTotal();
+      document.getElementById('cartTotal').textContent = `🛒 ${cartCountLabel()} | ${total.toLocaleString()} ${window.currencySymbol}`;
       const { amount: manualDiscount, percent: manualPct } = getDiscount();
-      const totalDiscount = manualDiscount + cartPackageDiscount;
-      const afterDiscount = Math.max(0, total - totalDiscount);
+      const totalDiscount = Units.roundMoney(manualDiscount + cartPackageDiscount);
+      const afterDiscount = Units.roundMoney(Math.max(0, total - totalDiscount));
       const type = document.getElementById('discountType').value;
       if (manualDiscount > 0) {
         document.getElementById('discountDisplay').textContent = type === 'percent' ? `${manualPct.toFixed(1)}% (${manualDiscount.toFixed(2)})` : `${manualPct.toFixed(1)}%`;
@@ -628,31 +684,26 @@
           const val = parseFloat(inp.value) || 0;
           if (val > 0) {
             const ratio = val / totalPaid;
-            inp.value = Math.round((val - (totalPaid - afterDiscount) * ratio) * 100) / 100;
+            inp.value = Units.roundMoney(val - (totalPaid - afterDiscount) * ratio);
           }
         });
         totalPaid = afterDiscount;
       }
       document.getElementById('totalPaidDisplay').textContent = totalPaid.toLocaleString();
-      document.getElementById('remainingAmount').textContent = (afterDiscount - totalPaid).toLocaleString();
+      document.getElementById('remainingAmount').textContent = Units.roundMoney(afterDiscount - totalPaid).toLocaleString();
     }
 
     async function completeSale(noPrint) {
       if (cart.length === 0) { window.showAlert('السلة فارغة', 'error'); return; }
-      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
       const { amount: manualDiscount, percent: discountPct } = getDiscount();
-      const totalDiscount = manualDiscount + cartPackageDiscount;
-      const afterDiscount = Math.max(0, total - totalDiscount);
+      const totalDiscount = Units.roundMoney(manualDiscount + cartPackageDiscount);
 
       const inputs = document.querySelectorAll('.payment-method-input');
-      let totalPaid = 0;
       const breakdown = {};
       inputs.forEach(inp => {
         const amt = parseFloat(inp.value) || 0;
-        if (amt > 0) { breakdown[inp.dataset.method] = amt; totalPaid += amt; }
+        if (amt > 0) breakdown[inp.dataset.method] = amt;
       });
-      if (totalPaid > afterDiscount) totalPaid = afterDiscount;
-      const remaining = Math.max(0, afterDiscount - totalPaid);
 
       const methodEntries = Object.entries(breakdown);
       const method = methodEntries.length > 0 ? methodEntries.reduce((a, b) => a[1] > b[1] ? a : b)[0] : 'cash';
@@ -662,7 +713,6 @@
 
       const customerName = customerId ? (window.posCustomers || []).find(c => c.id == customerId)?.name : null;
 
-      const paidForDb = Math.min(totalPaid, afterDiscount);
       const saleDate = document.getElementById('invoiceDate').value || new Date().toISOString().split('T')[0];
       // One call, one transaction. The main process writes the sale, its lines,
       // the stock movement and the drawer entries together, and it is the one
@@ -683,17 +733,19 @@
       const invoiceNum = saleResult.invoiceNum;
       const barcode = saleResult.barcode;
 
-      const details = cart.map(x => `${x.name} x${x.qty}`).join(', ');
+      const details = cart.map(x => `${x.name} x${Units.fullQty(x.qty, x.unit)}`).join(', ');
       const methodLabels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
       const methodStr = methodEntries.length > 1
         ? methodEntries.map(([k, v]) => `${methodLabels[k] || k} ${v.toLocaleString()}`).join(' + ')
         : (methodLabels[method] || method);
-      await window.api.telegram.sendNotification('sale', { invoice: invoiceNum, total: afterDiscount, paid: paidForDb, remaining, method: methodStr, details, customer: customerName });
+      // The stored amounts are the authoritative ones; print and notify from
+      // them so the receipt cannot differ from the invoice by a rounding cent.
+      await window.api.telegram.sendNotification('sale', { invoice: invoiceNum, total: saleResult.afterDiscount, paid: saleResult.paid, remaining: saleResult.remaining, method: methodStr, details, customer: customerName });
 
       document.getElementById('cartTotal').textContent = `✅ تم البيع - ${invoiceNum}`;
 
       if (!noPrint) {
-        window.api.print.invoice({ invoice: invoiceNum, items: cart, total: afterDiscount, paid: paidForDb, method: methodStr, discount: totalDiscount, discountPct, payment_breakdown: JSON.stringify(breakdown), customer: customerName, barcode, cashier: user.full_name, saleDate });
+        window.api.print.invoice({ invoice: invoiceNum, items: cart, total: saleResult.afterDiscount, paid: saleResult.paid, method: methodStr, discount: saleResult.discount, discountPct, payment_breakdown: JSON.stringify(breakdown), customer: customerName, barcode, cashier: user.full_name, saleDate });
       }
 
       cart = [];
@@ -815,7 +867,7 @@
     async function suspendInvoice() {
       if (cart.length === 0) { window.showAlert('السلة فارغة، لا يوجد فاتورة للتعليق', 'error'); return; }
       if (!await window.showConfirm('هل تريد تعليق هذه الفاتورة؟ يمكنك استرجاعها لاحقاً.')) return;
-      const total = cart.reduce((sum, x) => sum + x.price * x.qty, 0);
+      const total = cartTotal();
       const discountAmount = document.getElementById('discountAmount').value || 0;
       const discountType = document.getElementById('discountType').value;
       const invoiceDate = document.getElementById('invoiceDate').value || new Date().toISOString().split('T')[0];
@@ -830,7 +882,7 @@
         vodafone: vodafoneInput ? vodafoneInput.value : '0',
         instapay: instapayInput ? instapayInput.value : '0'
       });
-      const items = cart.map(x => ({ id: x.id, name: x.name, qty: x.qty, price: x.price, buy_price: x.buy_price || 0 }));
+      const items = cart.map(x => ({ id: x.id, name: x.name, barcode: x.barcode, unit: x.unit, qty: x.qty, price: x.price, stock: x.stock, original_price: x.original_price, buy_price: x.buy_price || 0, manual_price: !!x.manual_price }));
       const result = await window.api.db.get('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM suspended_invoices');
       const seq = String(result?.nextId || 1).padStart(5, '0');
       await window.api.db.run(
@@ -875,7 +927,7 @@
       } else {
         list.innerHTML = rows.map(r => {
           const items = JSON.parse(r.items || '[]');
-          const itemSummary = items.slice(0, 3).map(x => `${x.name} x${x.qty}`).join('، ');
+          const itemSummary = items.slice(0, 3).map(x => `${x.name} x${Units.fullQty(x.qty, x.unit)}`).join('، ');
           const more = items.length > 3 ? `... و${items.length - 3} أخرى` : '';
           return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:#f9f9f9;">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">
@@ -905,7 +957,17 @@
       const row = await window.api.db.get("SELECT * FROM suspended_invoices WHERE id=?", [id]);
       if (!row) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
       const items = JSON.parse(row.items || '[]');
-      cart = items.map(x => ({ id: x.id, name: x.name, qty: x.qty, price: x.price, buy_price: x.buy_price || 0 }));
+      cart = items.map(x => {
+        const p = products.find(pp => pp.id === x.id);
+        return {
+          key: `${x.id}`, id: x.id, name: x.name, barcode: x.barcode || (p && p.barcode),
+          unit: Units.unitOf(p || x),
+          qty: Units.roundQty(x.qty, Units.unitOf(p || x)),
+          price: x.price, stock: p ? p.stock : x.stock,
+          original_price: x.original_price, buy_price: x.buy_price || 0,
+          manual_price: !!x.manual_price
+        };
+      });
       document.getElementById('discountAmount').value = row.discount_amount || 0;
       document.getElementById('discountType').value = row.discount_type || 'amount';
       if (row.invoice_date) document.getElementById('invoiceDate').value = row.invoice_date;

@@ -85,6 +85,7 @@
     </div>
   </div>
 
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -199,7 +200,7 @@
 
     // Product picker
     async function loadProducts() {
-      allProducts = await window.api.db.all("SELECT id, name, barcode, sell_price, stock FROM products WHERE stock > 0 ORDER BY name");
+      allProducts = await window.api.db.all("SELECT id, name, barcode, sell_price, stock, unit FROM products WHERE stock > 0 ORDER BY name");
     }
 
     function filterPromoProducts() {
@@ -213,7 +214,7 @@
         return;
       }
       container.style.display = 'block';
-      container.innerHTML = filtered.map(p => `<div onclick="addProductToPromo(${p.id})" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()} ${window.currencySymbol} — 📦 ${p.stock}</span></div>`).join('');
+      container.innerHTML = filtered.map(p => `<div onclick="addProductToPromo(${p.id})" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}${Units.isWeightUnit(p.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${p.unit})</span>` : ''}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''} ${window.currencySymbol} — 📦 ${Units.fullQty(p.stock, p.unit)}</span></div>`).join('');
     }
 
     function addProductToPromo(productId) {
@@ -232,7 +233,9 @@
 
     function setPromoProductQty(productId, val) {
       const sel = selectedProducts.find(s => s.id === productId);
-      if (sel) sel.qty = parseInt(val) || 1;
+      // Promotion bundles count whole units, so the quantity stays an integer
+      // even for a product sold by weight.
+      if (sel) sel.qty = Math.max(1, Math.round(Number(val) || 1));
     }
 
     function renderSelectedProducts() {
@@ -243,10 +246,11 @@
       list.innerHTML = selectedProducts.map(s => {
         const p = allProducts.find(x => x.id === s.id);
         if (!p) return '';
+        const unit = Units.unitOf(p);
         const qtyInput = isPackage
-          ? `<input type="number" value="${s.qty}" min="1" onchange="setPromoProductQty(${s.id}, this.value)" style="width:50px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-size:12px;">`
+          ? `<input type="number" value="${Math.max(1, Math.round(Number(s.qty) || 1))}" min="1" step="1" onchange="setPromoProductQty(${s.id}, this.value)" style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-size:12px;">`
           : '<span style="color:var(--text-muted);font-size:11px">×1</span>';
-        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-hover, #f5f5f5);border-radius:4px;margin-bottom:4px;font-size:13px;"><span>${p.name}</span><span style="display:flex;align-items:center;gap:8px;">${qtyInput}<span style="color:var(--text-secondary)">${Number(p.sell_price).toLocaleString()}</span><button type="button" onclick="removeProductFromPromo(${s.id})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;">✕</button></span></div>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--bg-hover, #f5f5f5);border-radius:4px;margin-bottom:4px;font-size:13px;"><span>${p.name}${Units.isWeightUnit(unit) ? ` <span style="color:var(--text-secondary);font-size:11px;">(${unit})</span>` : ''}</span><span style="display:flex;align-items:center;gap:8px;">${qtyInput}<span style="color:var(--text-secondary)">${Number(p.sell_price).toLocaleString()}${Units.isWeightUnit(unit) ? ' / ' + unit : ''}</span><button type="button" onclick="removeProductFromPromo(${s.id})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;">✕</button></span></div>`;
       }).join('');
     }
 

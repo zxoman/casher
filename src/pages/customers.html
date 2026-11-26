@@ -95,6 +95,7 @@
       <button type="button" class="btn" style="background:var(--border);margin-top:8px;width:100%;" onclick="closeModal('paymentModal')">إلغاء</button>
     </div>
   </div>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -314,7 +315,7 @@
       const debts = await window.api.db.all("SELECT * FROM customer_debt_entries WHERE customer_id=? ORDER BY created_at DESC", [id]);
       // Fetch items for all sales
       const saleIds = sales.map(s => s.id);
-      const items = saleIds.length > 0 ? await window.api.db.all(`SELECT si.*, p.name as product_name FROM sale_items si JOIN products p ON si.product_id = p.id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')})`, saleIds) : [];
+      const items = saleIds.length > 0 ? await window.api.db.all(`SELECT si.*, p.name as product_name, p.unit FROM sale_items si JOIN products p ON si.product_id = p.id WHERE si.sale_id IN (${saleIds.map(() => '?').join(',')})`, saleIds) : [];
       const itemsBySale = {};
       items.forEach(i => { if (!itemsBySale[i.sale_id]) itemsBySale[i.sale_id] = []; itemsBySale[i.sale_id].push(i); });
       const saleDebt = sales.reduce((s, x) => s + x.remaining_amount, 0);
@@ -360,7 +361,7 @@
       </div>
       <div class="section-title">📄 فواتير المشتريات</div>
       ${sales.length === 0 ? '<p style="text-align:center;color:#999;">لا توجد فواتير</p>' : `<table><thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>المنتجات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th></tr></thead><tbody>
-      ${sales.map(s => `<tr><td style="font-weight:700;">${s.invoice_number}</td><td>${s.created_at}</td><td style="text-align:right;font-size:12px;">${(itemsBySale[s.id] || []).map(i => `${i.product_name || '#'+i.product_id} x${i.quantity} = ${Number(i.total).toLocaleString()}`).join('<br>')}</td><td>${Number(s.total_amount).toLocaleString()}</td><td>${Number(s.paid_amount).toLocaleString()}</td><td class="pos">${Number(s.remaining_amount).toLocaleString()}</td></tr>`).join('')}
+      ${sales.map(s => `<tr><td style="font-weight:700;">${s.invoice_number}</td><td>${s.created_at}</td><td style="text-align:right;font-size:12px;">${(itemsBySale[s.id] || []).map(i => `${i.product_name || '#'+i.product_id} x${Units.fullQty(i.quantity, i.unit)} = ${Number(i.total).toLocaleString()}`).join('<br>')}</td><td>${Number(s.total_amount).toLocaleString()}</td><td>${Number(s.paid_amount).toLocaleString()}</td><td class="pos">${Number(s.remaining_amount).toLocaleString()}</td></tr>`).join('')}
       </tbody></table>`}
       <div class="section-title">💰 الديون المسجلة</div>
       ${debts.length === 0 ? '<p style="text-align:center;color:#999;">لا توجد ديون مسجلة</p>' : `<table><thead><tr><th>التاريخ</th><th>البيان</th><th>المبلغ</th></tr></thead><tbody>

@@ -66,6 +66,7 @@
   <div style="text-align:left;margin:5px 0;"><canvas id="barcodeCanvas"></canvas></div>
 
   <script src="./js/JsBarcode.all.min.js"></script>
+  <script src="./js/units.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
     const printer = params.get('printer') || '80mm';
@@ -137,7 +138,7 @@
         : `${Number(i.price).toFixed(2)}`;
       return `<tr${alt}>
         <td class="item-name">${i.name}</td>
-        <td class="item-qty">${i.qty}</td>
+        <td class="item-qty">${Units.fullQty(i.qty, i.unit)}</td>
         <td class="item-price">${priceCell}</td>
         <td class="item-price">${itemTotal}</td>
       </tr>`;

@@ -125,6 +125,7 @@
       <button class="btn" data-v="cancel" style="width:100%;background:var(--border);margin-top:10px;">إلغاء</button>
     </div>
   </div>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -157,7 +158,7 @@
       const docs = await window.api.db.all(
         `SELECT * FROM return_documents WHERE type = ? ORDER BY created_at DESC, id DESC`, [isPurchase ? 'purchase' : 'sale']);
       const lines = await window.api.db.all(
-        `SELECT r.id, r.document_id, r.product_id, r.quantity, r.amount, r.debt_reduced, p.name AS product_name
+        `SELECT r.id, r.document_id, r.product_id, r.quantity, r.amount, r.debt_reduced, p.name AS product_name, p.unit
          FROM returns r LEFT JOIN products p ON p.id = r.product_id
          WHERE r.document_id IS NOT NULL ORDER BY r.id`);
       const byDoc = {};
@@ -177,6 +178,12 @@
       document.getElementById('returnsTable').innerHTML = docs.map(d => {
         const items = byDoc[d.id] || [];
         const qty = items.reduce((s, l) => s + Number(l.quantity || 0), 0);
+        // Kilograms and pieces cannot be added into one meaningful number, so
+        // the summary only totals when every line shares a unit.
+        const unitSet = new Set(items.map(i => Units.normalizeUnit(i.unit)));
+        const qtySummary = unitSet.size === 1
+          ? Units.fullQty(qty, items[0] && items[0].unit)
+          : `${items.length} صنف`;
         const typeLabel = d.type === 'purchase'
           ? '<span style="color:var(--info)">مشتريات</span>'
           : '<span style="color:var(--warning)">مبيعات</span>';
@@ -189,11 +196,11 @@
                 <thead><tr><th>المنتج</th><th>الكمية</th><th>المبلغ</th><th style="text-align:right;">السبب</th></tr></thead>
                 <tbody>${items.map(i => `<tr>
                   <td>${esc(i.product_name) || '-'}</td>
-                  <td>${i.quantity}</td>
+                  <td>${Units.fullQty(i.quantity, i.unit)}</td>
                   <td>${Number(i.amount).toLocaleString()}</td>
                   <td style="font-size:11px;color:var(--text-secondary);">${esc(i.debt_reduced) && Number(i.debt_reduced) > 0 ? 'خصم ' + Number(i.debt_reduced).toLocaleString() : ''}</td>
                 </tr>`).join('')}</tbody>
-                <tfoot><tr><td><b>الإجمالي</b></td><td><b>${qty}</b></td>
+                <tfoot><tr><td><b>الإجمالي</b></td><td><b>${qtySummary}</b></td>
                   <td><b>${Number(d.total).toLocaleString()}</b></td><td></td></tr></tfoot>
               </table>
             </td></tr>`).join('');
@@ -202,7 +209,7 @@
             <td><b>${esc(d.return_number) || '-'}</b></td>
             <td>${esc(d.source_invoice) || '<span style="color:var(--text-secondary);font-style:italic;">بدون فاتورة</span>'}</td>
             <td>${typeLabel}</td>
-            <td>${items.length} صنف (${qty} قطعة)</td>
+            <td>${items.length} صنف${unitSet.size === 1 ? ` (${qtySummary})` : ''}</td>
             <td style="color:var(--danger);font-weight:700;">${Number(d.total).toLocaleString()}</td>
             <td>${cashLabel(d)}</td>
             <td>${esc(d.reason) || '-'}</td>
@@ -260,7 +267,7 @@
       const cust = sale.customer_id ? await window.api.db.get("SELECT name FROM customers WHERE id=?", [sale.customer_id]) : null;
       currentSaleCustomer = cust ? cust.name : null;
       document.getElementById('saleInfo').innerHTML = `✅ فاتورة <b>${sale.invoice_number}</b> — العميل: ${currentSaleCustomer || '-'} | الإجمالي: ${Number(sale.total_amount).toLocaleString()} | المدفوع: ${Number(sale.paid_amount).toLocaleString()} | متبقي للعميل: <b style="color:var(--danger)">${Number(sale.remaining_amount).toLocaleString()}</b>`;
-      saleInvoiceItems = await window.api.db.all("SELECT si.product_id, si.quantity AS inv_qty, si.price, p.name, p.stock, COALESCE((SELECT SUM(r.quantity) FROM returns r WHERE (r.type='sale' OR r.type IS NULL) AND r.sale_id = si.sale_id AND r.product_id = si.product_id),0) AS returned FROM sale_items si LEFT JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [sale.id]);
+      saleInvoiceItems = await window.api.db.all("SELECT si.product_id, si.quantity AS inv_qty, si.price, p.name, p.stock, p.unit, COALESCE((SELECT SUM(r.quantity) FROM returns r WHERE (r.type='sale' OR r.type IS NULL) AND r.sale_id = si.sale_id AND r.product_id = si.product_id),0) AS returned FROM sale_items si LEFT JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [sale.id]);
       renderReturnList();
       updateReturnTotal();
     }
@@ -345,13 +352,13 @@
         item = saleInvoiceItems.find(i => i.product_id === p.id);
       }
       if (!item) { window.showAlert(`"${p.name}" مش في الفاتورة`, 'error'); return; }
-      const available = (item.inv_qty || 0) - (item.returned || 0);
-      if (available <= 0) { window.showAlert(`"${p.name}" اترجع بالكامل من الفاتورة (${item.returned}/${item.inv_qty})`, 'error'); return; }
+      const available = Units.roundQty((item.inv_qty || 0) - (item.returned || 0), Units.unitOf(item));
+      if (available <= 0) { window.showAlert(`"${p.name}" اترجع بالكامل من الفاتورة (${Units.fullQty(item.returned, item.unit)} من ${Units.fullQty(item.inv_qty, item.unit)})`, 'error'); return; }
       addSaleReturnItem(p.id, available, item.price);
       input.value = '';
       filterReturnList();
       input.focus();
-      window.showAlert(`✔ ${p.name} — متاح للإرجاع ${available}`);
+      window.showAlert(`✔ ${p.name} — متاح للإرجاع ${Units.fullQty(available, item.unit)}`);
     }
 
     function renderReturnList() {
@@ -366,19 +373,19 @@
       const list = q ? saleInvoiceItems.filter(i => (i.name || '').toLowerCase().includes(q) || (i.barcode && String(i.barcode).toLowerCase().includes(q))) : saleInvoiceItems;
       if (!list.length) { container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;">لا توجد أصناف مطابقة</div>'; renderSelectedSaleReturns(); return; }
       container.innerHTML = list.map(i => {
-        const available = (i.inv_qty || 0) - (i.returned || 0);
+        const available = Units.roundQty((i.inv_qty || 0) - (i.returned || 0), i.unit);
         const sel = selectedSaleReturns.find(s => s.id === i.product_id);
         return `<div data-pid="${i.product_id}" style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:${available > 0 ? 'pointer' : 'not-allowed'};opacity:${available > 0 ? 1 : 0.5};" onmouseover="if(${available > 0})this.style.background='var(--bg)'" onmouseout="this.style.background=''">
-          <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'}</span>
-          <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${i.inv_qty} | مرتجع: ${i.returned || 0} | متاح: <b style="color:${available > 0 ? 'var(--info)' : 'var(--danger)'}">${available}</b></span>
+          <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'} ${Units.isWeightUnit(i.unit) ? `<span style="font-size:11px;color:var(--text-secondary);">(${i.unit})</span>` : ''}</span>
+          <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${Units.formatQty(i.inv_qty, i.unit)} | مرتجع: ${Units.formatQty(i.returned || 0, i.unit)} | متاح: <b style="color:${available > 0 ? 'var(--info)' : 'var(--danger)'}">${Units.formatQty(available, i.unit)}</b></span>
           <span style="font-size:11px;color:var(--text-secondary);">${Number(i.price).toLocaleString()}</span>
-          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${Units.formatQty(sel.qty, i.unit)}</span>` : ''}
         </div>`;
       }).join('');
       container.querySelectorAll('[data-pid]').forEach(el => el.addEventListener('click', () => {
         const item = saleInvoiceItems.find(i => i.product_id === parseInt(el.dataset.pid));
         if (!item) return;
-        const available = (item.inv_qty || 0) - (item.returned || 0);
+        const available = Units.roundQty((item.inv_qty || 0) - (item.returned || 0), item.unit);
         if (available <= 0) { window.showAlert('هذا الصنف اترجع بالكامل', 'error'); return; }
         addSaleReturnItem(item.product_id, available, item.price);
       }));
@@ -388,13 +395,24 @@
     function addSaleReturnItem(id, setQty, setPrice) {
       const item = saleInvoiceItems.find(x => x.product_id === id);
       if (!item) return;
-      const available = (item.inv_qty || 0) - (item.returned || 0);
+      const unit = Units.unitOf(item);
+      const min = Units.minQty(unit);
+      const available = Units.roundQty((item.inv_qty || 0) - (item.returned || 0), unit);
+      const pickQty = (qty) => Math.max(min, Math.min(Units.roundQty(qty, unit), available));
       const existing = selectedSaleReturns.find(s => s.id === id);
       if (existing) {
-        existing.qty = Math.max(1, setQty != null ? Math.min(setQty, available) : existing.qty);
+        existing.unit = unit;
+        existing.qty = pickQty(setQty != null ? setQty : existing.qty);
         if (setPrice != null) existing.price = setPrice;
       }
-      else { selectedSaleReturns.push({ id, name: item.name || 'منتج محذوف', qty: Math.max(1, setQty != null ? Math.min(setQty, available) : 1), price: setPrice != null ? setPrice : item.price }); }
+      else {
+        // One whole unit is the natural default; a line with only a fraction
+        // left starts at what is actually available.
+        const fallback = setQty != null
+          ? setQty
+          : Math.min(Units.isPiece(unit) ? 1 : Units.qtyIncrement(unit), available);
+        selectedSaleReturns.push({ id, name: item.name || 'منتج محذوف', unit, qty: pickQty(fallback), price: setPrice != null ? setPrice : item.price });
+      }
       renderReturnList();
       updateReturnTotal();
     }
@@ -413,10 +431,10 @@
         '</div>' +
         selectedSaleReturns.map((s, i) => `
           <div style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:4px;margin-bottom:4px;">
-            <span style="flex:1;font-size:13px;">${s.name}</span>
-            <input type="number" value="${s.qty}" min="1" style="width:54px;${inputStyle}" onchange="updateReturnQty(${i}, this.value)">
+            <span style="flex:1;font-size:13px;">${s.name}${Units.isWeightUnit(s.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${s.unit})</span>` : ''}</span>
+            <input type="number" value="${Units.roundQty(s.qty, s.unit)}" min="${Units.minQty(s.unit)}" step="${Units.qtyStep(s.unit)}" style="width:64px;${inputStyle}" onchange="updateReturnQty(${i}, this.value)">
             <input type="number" value="${s.price}" min="0" step="0.01" style="width:78px;${inputStyle}color:var(--warning);font-weight:700;" onchange="updateReturnPrice(${i}, this.value)">
-            <span id="srLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Number(s.price * s.qty).toLocaleString()}</span>
+            <span id="srLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Units.formatMoney(s.price * s.qty)}</span>
             <button onclick="removeSaleReturnItem(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;width:18px;">✕</button>
           </div>
         `).join('');
@@ -425,15 +443,18 @@
     function refreshReturnLineTotal(i) {
       const s = selectedSaleReturns[i];
       const el = document.getElementById('srLineTotal' + i);
-      if (s && el) el.textContent = Number(s.price * s.qty).toLocaleString();
+      if (s && el) el.textContent = Units.formatMoney(s.price * s.qty);
     }
 
     function updateReturnQty(i, val) {
-      const item = saleInvoiceItems.find(x => x.product_id === selectedSaleReturns[i].id);
-      const max = item ? (item.inv_qty || 0) - (item.returned || 0) : Infinity;
-      let n = Math.max(1, parseInt(val) || 1);
-      if (n > max) { n = Math.max(1, max); window.showAlert(`الحد الأقصى للإرجاع ${max}`, 'error'); }
-      selectedSaleReturns[i].qty = n;
+      const s = selectedSaleReturns[i];
+      const item = saleInvoiceItems.find(x => x.product_id === s.id);
+      const unit = Units.normalizeUnit(s.unit);
+      const max = item ? Units.roundQty((item.inv_qty || 0) - (item.returned || 0), unit) : Infinity;
+      let n = Units.roundQty(val, unit);
+      if (!Number.isFinite(n) || n < Units.minQty(unit)) n = Units.minQty(unit);
+      if (n > max) { n = max; window.showAlert(`الحد الأقصى للإرجاع ${Units.fullQty(max, unit)}`, 'error'); }
+      s.qty = n;
       refreshReturnLineTotal(i);
       updateReturnTotal();
     }
@@ -451,7 +472,7 @@
     }
 
     function updateReturnTotal() {
-      const total = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const total = Units.roundMoney(selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0));
       document.getElementById('returnTotal').textContent = `الإجمالي: ${total.toLocaleString()}`;
       const ready = selectedSaleReturns.length > 0 && currentSaleId;
       document.getElementById('submitReturnBtn').disabled = !ready;
@@ -465,7 +486,7 @@
     }
 
     function chooseSaleDestination() {
-      const total = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const total = Units.roundMoney(selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0));
       const count = selectedSaleReturns.length;
       document.getElementById('srDestTotal').textContent = total.toLocaleString() + ' ' + window.currencySymbol;
       document.getElementById('srDestItems').textContent = count === 1 ? 'منتج واحد' : `${count} منتجات`;
@@ -485,7 +506,7 @@
     async function submitSaleReturn() {
       if (!currentSaleId) { window.showAlert('امسح فاتورة البيع أولاً', 'error'); return; }
       if (selectedSaleReturns.length === 0) { window.showAlert('اختر منتجات للإرجاع', 'error'); return; }
-      const totalAmount = selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const totalAmount = Units.roundMoney(selectedSaleReturns.reduce((sum, s) => sum + s.price * s.qty, 0));
       const choice = await chooseSaleDestination();
       if (choice === 'cancel' || !choice) return;
 
@@ -562,7 +583,7 @@
       const sup = pu.supplier_id ? await window.api.db.get("SELECT name FROM suppliers WHERE id=?", [pu.supplier_id]) : null;
       document.getElementById('purchaseInvoiceInfo').innerHTML = `✅ فاتورة <b>${pu.invoice_number}</b> — المورد: ${sup ? sup.name : '-'} | الإجمالي: ${Number(pu.total_amount).toLocaleString()} | المتبقي للمورد: <b style="color:var(--danger)">${Number(pu.remaining_amount).toLocaleString()}</b> &nbsp;<a href="#" onclick="clearPurchaseInvoice();return false;" style="color:var(--danger);font-size:11px;">✕ إلغاء الربط</a>`;
 
-      const items = await window.api.db.all("SELECT pi.product_id, pi.quantity AS inv_qty, pi.buy_price, p.name, p.stock, p.barcode FROM purchase_items pi LEFT JOIN products p ON pi.product_id = p.id WHERE pi.purchase_id = ?", [pu.id]);
+      const items = await window.api.db.all("SELECT pi.product_id, pi.quantity AS inv_qty, pi.buy_price, p.name, p.stock, p.barcode, p.unit FROM purchase_items pi LEFT JOIN products p ON pi.product_id = p.id WHERE pi.purchase_id = ?", [pu.id]);
       const itemsBox = document.getElementById('purchaseInvoiceItems');
       itemsBox.style.display = 'block';
       itemsBox.innerHTML = '<div style="padding:6px 10px;background:var(--info);color:#fff;font-size:12px;font-weight:700;position:sticky;top:0;">أصناف الفاتورة — اضغط للإضافة:</div>' +
@@ -570,10 +591,10 @@
           const stock = i.stock || 0;
           const sel = selectedPurchaseReturns.find(s => s.id === i.product_id);
           return `<div data-pid="${i.product_id}" style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
-            <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'}</span>
-            <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${i.inv_qty} | مخزون: ${stock}</span>
+            <span style="flex:1;font-size:13px;">${i.name || 'منتج محذوف'} ${Units.isWeightUnit(i.unit) ? `<span style="font-size:11px;color:var(--text-secondary);">(${i.unit})</span>` : ''}</span>
+            <span style="font-size:11px;color:var(--text-secondary);">فاتورة: ${Units.formatQty(i.inv_qty, i.unit)} | مخزون: ${Units.formatQty(stock, i.unit)}</span>
             <span style="font-size:11px;color:var(--text-secondary);">${Number(i.buy_price).toLocaleString()}</span>
-            ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+            ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${Units.formatQty(sel.qty, i.unit)}</span>` : ''}
           </div>`;
         }).join('') : '<div style="padding:12px;text-align:center;color:var(--text-secondary);font-size:13px;">لا توجد أصناف في هذه الفاتورة</div>');
       itemsBox.querySelectorAll('[data-pid]').forEach(el => el.addEventListener('click', () => {
@@ -626,13 +647,13 @@
     }
 
     function addScannedProduct(p, input) {
-      const stock = p.stock || 0;
+      const stock = Number(p.stock) || 0;
       if (stock <= 0) { window.showAlert(`مخزون "${p.name}" صفر`, 'error'); return; }
       addPurchaseReturnItem(p.id, stock, p.buy_price);
       input.value = '';
       filterPurchaseReturnProducts();
       input.focus();
-      window.showAlert(`✔ ${p.name} — الكمية ${stock}`);
+      window.showAlert(`✔ ${p.name} — الكمية ${Units.fullQty(stock, p.unit)}`);
     }
 
     function renderPurchaseReturnList() {
@@ -642,10 +663,10 @@
       container.innerHTML = filtered.map(p => {
         const sel = selectedPurchaseReturns.find(s => s.id === p.id);
         return `<div style="display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="addPurchaseReturnItem(${p.id})" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
-          <span style="flex:1;font-size:13px;">${p.name}</span>
-          <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">📦 ${p.stock||0}</span>
+          <span style="flex:1;font-size:13px;">${p.name} ${Units.isWeightUnit(p.unit) ? `<span style="font-size:11px;color:var(--text-secondary);">(${p.unit})</span>` : ''}</span>
+          <span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">📦 ${Units.formatQty(p.stock || 0, p.unit)}</span>
           <span style="font-size:11px;color:var(--text-secondary);">${Number(p.buy_price).toLocaleString()}</span>
-          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${sel.qty}</span>` : ''}
+          ${sel ? `<span style="font-size:11px;color:var(--primary);font-weight:700;">✔ ${Units.formatQty(sel.qty, p.unit)}</span>` : ''}
         </div>`;
       }).join('');
       if (filtered.length === 0) container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:14px;">لا توجد منتجات</div>';
@@ -655,12 +676,17 @@
     function addPurchaseReturnItem(id, setQty, setPrice) {
       const p = allProducts.find(x => x.id === id);
       if (!p) return;
+      const unit = Units.unitOf(p);
+      const min = Units.minQty(unit);
       const existing = selectedPurchaseReturns.find(s => s.id === id);
       if (existing) {
-        if (setQty != null) existing.qty = Math.max(1, setQty); else existing.qty++;
+        existing.unit = unit;
+        existing.qty = setQty != null
+          ? Math.max(min, Units.roundQty(setQty, unit))
+          : Units.roundQty(existing.qty + Units.qtyIncrement(unit), unit);
         if (setPrice != null) existing.price = setPrice;
       }
-      else { selectedPurchaseReturns.push({ id: p.id, name: p.name, qty: Math.max(1, setQty != null ? setQty : 1), price: setPrice != null ? setPrice : p.buy_price }); }
+      else { selectedPurchaseReturns.push({ id: p.id, name: p.name, unit, qty: Math.max(min, Units.roundQty(setQty != null ? setQty : 1, unit)), price: setPrice != null ? setPrice : p.buy_price }); }
       renderPurchaseReturnList();
       updatePurchaseReturnTotal();
     }
@@ -679,10 +705,10 @@
         '</div>' +
         selectedPurchaseReturns.map((s, i) => `
           <div style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:4px;margin-bottom:4px;">
-            <span style="flex:1;font-size:13px;">${s.name}</span>
-            <input type="number" value="${s.qty}" min="1" style="width:54px;${inputStyle}" onchange="updatePurchaseReturnQty(${i}, this.value)">
+            <span style="flex:1;font-size:13px;">${s.name}${Units.isWeightUnit(s.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${s.unit})</span>` : ''}</span>
+            <input type="number" value="${Units.roundQty(s.qty, s.unit)}" min="${Units.minQty(s.unit)}" step="${Units.qtyStep(s.unit)}" style="width:64px;${inputStyle}" onchange="updatePurchaseReturnQty(${i}, this.value)">
             <input type="number" value="${s.price}" min="0" step="0.01" style="width:78px;${inputStyle}color:var(--primary);font-weight:700;" onchange="updatePurchaseReturnPrice(${i}, this.value)">
-            <span id="prLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Number(s.price * s.qty).toLocaleString()}</span>
+            <span id="prLineTotal${i}" style="font-size:12px;color:var(--text-secondary);width:70px;text-align:center;">${Units.formatMoney(s.price * s.qty)}</span>
             <button onclick="removePurchaseReturnItem(${i})" style="color:var(--danger);border:none;background:none;cursor:pointer;font-size:16px;width:18px;">✕</button>
           </div>
         `).join('');
@@ -691,11 +717,15 @@
     function refreshPurchaseReturnLineTotal(i) {
       const s = selectedPurchaseReturns[i];
       const el = document.getElementById('prLineTotal' + i);
-      if (s && el) el.textContent = Number(s.price * s.qty).toLocaleString();
+      if (s && el) el.textContent = Units.formatMoney(s.price * s.qty);
     }
 
     function updatePurchaseReturnQty(i, val) {
-      selectedPurchaseReturns[i].qty = Math.max(1, parseInt(val) || 1);
+      const s = selectedPurchaseReturns[i];
+      const unit = Units.normalizeUnit(s.unit);
+      let n = Units.roundQty(val, unit);
+      if (!Number.isFinite(n) || n < Units.minQty(unit)) n = Units.minQty(unit);
+      s.qty = n;
       refreshPurchaseReturnLineTotal(i);
       updatePurchaseReturnTotal();
     }
@@ -713,7 +743,7 @@
     }
 
     function updatePurchaseReturnTotal() {
-      const total = selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const total = Units.roundMoney(selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0));
       document.getElementById('purchaseReturnTotal').textContent = `الإجمالي: ${total.toLocaleString()}`;
       const ready = selectedPurchaseReturns.length > 0;
       document.getElementById('submitPurchaseReturn').disabled = !ready;
@@ -727,7 +757,7 @@
     }
 
     function chooseReturnDestination() {
-      const total = selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0);
+      const total = Units.roundMoney(selectedPurchaseReturns.reduce((sum, s) => sum + s.price * s.qty, 0));
       const count = selectedPurchaseReturns.length;
       document.getElementById('prDestTotal').textContent = total.toLocaleString() + ' ' + window.currencySymbol;
       document.getElementById('prDestItems').textContent = count === 1 ? 'منتج واحد' : `${count} منتجات`;
@@ -771,6 +801,7 @@
       if (selectedPurchaseReturns.length === 0) { window.showAlert('اختر منتجات للإرجاع', 'error'); return; }
       let totalAmount = 0;
       for (const s of selectedPurchaseReturns) totalAmount += s.price * s.qty;
+      totalAmount = Units.roundMoney(totalAmount);
       const choice = await chooseReturnDestination();
       if (choice === 'cancel') return;
 
@@ -808,7 +839,7 @@
       const lines = await window.api.db.all("SELECT COUNT(*) c, COALESCE(SUM(quantity),0) q FROM returns WHERE document_id=?", [documentId]);
       if (!await window.showConfirm(
         `حذف فاتورة المرتجع ${doc.return_number}؟\n` +
-        `${lines[0].c} صنف (${lines[0].q} قطعة) بإجمالي ${Number(doc.total).toLocaleString()}\n` +
+        `${lines[0].c} صنف بإجمالي ${Number(doc.total).toLocaleString()}\n` +
         'هترجع الكميات للمخزون، وهترجع المديونية، وهتتشال حركة النقد.')) return;
       await window.api.ops.deleteReturnDoc(documentId);
       loadReturns();
@@ -824,6 +855,7 @@
       if (p.size) bits.push('مقاس ' + p.size);
       if (p.color) bits.push(p.color);
       if (p.barcode) bits.push('باركود ' + p.barcode);
+      if (Units.isWeightUnit(p.unit)) bits.push(p.unit);
       return bits.join(' · ');
     }
 
@@ -843,7 +875,7 @@
             <div style="font-weight:700;font-size:13px;">${esc(p.name)}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${esc(meta)}</div>
           </div>
-          <div style="font-size:11px;color:var(--text-secondary);">📦 ${Number(p.stock) || 0}</div>
+          <div style="font-size:11px;color:var(--text-secondary);">📦 ${Units.fullQty(p.stock, p.unit)}</div>
           <div style="font-size:12px;font-weight:700;color:var(--danger);">${Number(p.sell_price || 0).toLocaleString()}</div>
         </div>`;
       }).join('');
@@ -901,7 +933,7 @@
       box.style.display = 'block';
       box.innerHTML = list.map(p => `<div data-id="${p.id}" style="padding:6px 9px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
           onmousedown="quickPickProduct(${p.id})">
-          ${esc(p.name)} <span style="color:var(--text-secondary);font-size:11px;">| ${esc(productLabel(p)) || 'بدون باركود'} | رصيد ${p.stock}</span>
+          ${esc(p.name)} <span style="color:var(--text-secondary);font-size:11px;">| ${esc(productLabel(p)) || 'بدون باركود'} | رصيد ${Units.fullQty(p.stock, p.unit)}</span>
         </div>`).join('');
     }
 
@@ -927,13 +959,14 @@
     function quickPickProduct(id) {
       const p = allProducts.find(x => x.id === id);
       if (!p) return;
+      const unit = Units.unitOf(p);
       const existing = quickReturnItems.find(i => i.productId === id);
-      if (existing) { existing.qty += 1; }
+      if (existing) { existing.qty = Units.roundQty(existing.qty + Units.qtyIncrement(unit), unit); }
       else {
         // Price defaults to the selling price; the cashier can change it per
         // line if the item was actually sold at something else.
         quickReturnItems.push({
-          productId: id, name: p.name, qty: 1,
+          productId: id, name: p.name, unit, qty: 1,
           price: Number(p.sell_price) || Number(p.wholesale_price) || 0
         });
       }
@@ -950,40 +983,42 @@
       } else {
         box.innerHTML = quickReturnItems.map((it, idx) => `
           <div style="display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--border);">
-            <div style="flex:1;font-size:13px;">${esc(it.name)}</div>
-            <input type="number" min="1" step="1" value="${it.qty}" class="form-input" style="width:66px;"
+            <div style="flex:1;font-size:13px;">${esc(it.name)}${Units.isWeightUnit(it.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${it.unit})</span>` : ''}</div>
+            <input type="number" min="${Units.minQty(it.unit)}" step="${Units.qtyStep(it.unit)}" value="${Units.roundQty(it.qty, it.unit)}" class="form-input" style="width:75px;"
                    oninput="quickSetQty(${idx}, this.value)">
             <input type="number" min="0" step="0.01" value="${it.price}" class="form-input" style="width:86px;"
                    oninput="quickSetPrice(${idx}, this.value)">
-            <div style="width:84px;text-align:left;font-weight:700;color:var(--danger);" id="quickLine-${idx}">${(it.qty * it.price).toLocaleString()}</div>
+            <div style="width:84px;text-align:left;font-weight:700;color:var(--danger);" id="quickLine-${idx}">${Units.formatMoney(it.qty * it.price)}</div>
             <button class="btn btn-sm btn-danger" onclick="quickRemove(${idx})">✕</button>
           </div>`).join('');
       }
-      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+      document.getElementById('quickTotal').textContent = Units.formatMoney(quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0));
     }
 
     function quickSetQty(idx, v) {
-      const q = parseInt(v, 10);
-      if (!Number.isInteger(q) || q <= 0) { quickReturnItems.splice(idx, 1); renderQuickItems(); return; }
-      quickReturnItems[idx].qty = q;
+      const it = quickReturnItems[idx];
+      const unit = Units.normalizeUnit(it.unit);
+      const q = Units.roundQty(v, unit);
+      if (!Number.isFinite(q) || q < Units.minQty(unit)) { quickReturnItems.splice(idx, 1); renderQuickItems(); return; }
+      it.qty = q;
       const el = document.getElementById('quickLine-' + idx);
-      if (el) el.textContent = (q * quickReturnItems[idx].price).toLocaleString();
-      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+      if (el) el.textContent = Units.formatMoney(q * it.price);
+      document.getElementById('quickTotal').textContent = Units.formatMoney(quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0));
     }
     function quickSetPrice(idx, v) {
       const p = Number(v);
       if (!Number.isFinite(p) || p < 0) return;
       quickReturnItems[idx].price = p;
       const el = document.getElementById('quickLine-' + idx);
-      if (el) el.textContent = (quickReturnItems[idx].qty * p).toLocaleString();
-      document.getElementById('quickTotal').textContent = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+      if (el) el.textContent = Units.formatMoney(quickReturnItems[idx].qty * p);
+      document.getElementById('quickTotal').textContent = Units.formatMoney(quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0));
     }
     function quickRemove(idx) { quickReturnItems.splice(idx, 1); renderQuickItems(); }
 
     async function submitQuickReturn() {
       if (!quickReturnItems.length) { window.showAlert('امسح منتج واحد على الأقل', 'error'); return; }
       const dest = document.getElementById('quickDestination').value;
-      const total = quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0);
+      const total = Units.roundMoney(quickReturnItems.reduce((s, i) => s + i.qty * i.price, 0));
       if (dest !== 'none' && total > 0) {
         const pool = dest === 'drawer' ? 'الدرج' : 'الخزينة';
         if (!await window.showConfirm(`هتصرف ${total.toLocaleString()} من ${pool} كاش للعميل. متابعة؟`)) return;
@@ -1017,14 +1052,14 @@
       const doc = await window.api.db.get("SELECT * FROM return_documents WHERE id=?", [documentId]);
       if (!doc) return;
       const lines = await window.api.db.all(
-        `SELECT r.product_id, r.quantity, r.amount, p.name AS product_name, p.sell_price
+        `SELECT r.product_id, r.quantity, r.amount, p.name AS product_name, p.sell_price, p.unit
          FROM returns r LEFT JOIN products p ON p.id = r.product_id WHERE r.document_id = ? ORDER BY r.id`, [documentId]);
       if (!lines.length) return;
 
       editingReturnId = documentId;
       editingReturnItems = lines.map(l => {
         const qty = Number(l.quantity) || 0;
-        return { productId: l.product_id, name: l.product_name || '-', qty, price: qty ? Number(l.amount) / qty : 0 };
+        return { productId: l.product_id, name: l.product_name || '-', unit: l.unit || 'قطعة', qty, price: qty ? Units.roundMoney(Number(l.amount) / qty) : 0 };
       });
       const isPurchase = doc.type === 'purchase';
       document.getElementById('editModalTitle').textContent = `تعديل فاتورة ${doc.return_number}`;
@@ -1047,23 +1082,25 @@
     function renderEditItems() {
       document.getElementById('editItemsBox').innerHTML = editingReturnItems.map((it, idx) => `
         <div style="display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--border);">
-          <div style="flex:1;font-size:13px;">${esc(it.name)}</div>
-          <input type="number" min="1" step="1" value="${it.qty}" class="form-input" style="width:70px;"
+          <div style="flex:1;font-size:13px;">${esc(it.name)}${Units.isWeightUnit(it.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${it.unit})</span>` : ''}</div>
+          <input type="number" min="${Units.minQty(it.unit)}" step="${Units.qtyStep(it.unit)}" value="${Units.roundQty(it.qty, it.unit)}" class="form-input" style="width:75px;"
                  oninput="updateEditQty(${idx}, this.value)">
           <input type="number" min="0" step="0.01" value="${it.price}" class="form-input" style="width:90px;"
                  oninput="updateEditPrice(${idx}, this.value)">
-          <div style="width:90px;text-align:left;font-weight:700;color:var(--danger);" id="editLine-${idx}">${(it.qty * it.price).toLocaleString()}</div>
+          <div style="width:90px;text-align:left;font-weight:700;color:var(--danger);" id="editLine-${idx}">${Units.formatMoney(it.qty * it.price)}</div>
           <button class="btn btn-sm btn-danger" onclick="removeEditItem(${idx})">✕</button>
         </div>`).join('');
       updateEditTotal();
     }
 
     function updateEditQty(idx, v) {
-      const q = parseInt(v, 10);
-      if (!Number.isInteger(q) || q <= 0) return;
-      editingReturnItems[idx].qty = q;
+      const it = editingReturnItems[idx];
+      const unit = Units.normalizeUnit(it.unit);
+      const q = Units.roundQty(v, unit);
+      if (!Number.isFinite(q) || q < Units.minQty(unit)) return;
+      it.qty = q;
       const el = document.getElementById('editLine-' + idx);
-      if (el) el.textContent = (q * editingReturnItems[idx].price).toLocaleString();
+      if (el) el.textContent = Units.formatMoney(q * it.price);
       updateEditTotal();
     }
     function updateEditPrice(idx, v) {
@@ -1071,13 +1108,13 @@
       if (!Number.isFinite(p) || p < 0) return;
       editingReturnItems[idx].price = p;
       const el = document.getElementById('editLine-' + idx);
-      if (el) el.textContent = (editingReturnItems[idx].qty * p).toLocaleString();
+      if (el) el.textContent = Units.formatMoney(editingReturnItems[idx].qty * p);
       updateEditTotal();
     }
     function removeEditItem(idx) { editingReturnItems.splice(idx, 1); renderEditItems(); }
     function updateEditTotal() {
       document.getElementById('editNewTotal').textContent =
-        editingReturnItems.reduce((s, i) => s + i.qty * i.price, 0).toLocaleString();
+        Units.formatMoney(editingReturnItems.reduce((s, i) => s + i.qty * i.price, 0));
     }
 
     async function saveReturnEdit() {

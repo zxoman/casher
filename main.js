@@ -8,6 +8,7 @@ const {
 const { updateSetColumns, writeRequirement } = require('./src/js/sql-guard');
 const bcrypt = require('bcryptjs');
 const db = require('./src/js/database');
+const Units = require('./src/js/units');
 const TelegramBot = require('./src/js/bot/telegram');
 
 let mainWindow;
@@ -594,20 +595,23 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
 
   const lines = raw.map((it) => {
     const productId = parseInt(it && it.productId, 10);
-    const qty = Number(it && it.qty);
     const price = Number(it && it.price);
     if (!Number.isInteger(productId) || productId <= 0) throw new Error('صنف غير صالح في السلة');
-    if (!Number.isFinite(qty) || qty <= 0) throw new Error('كمية غير صالحة');
     if (!Number.isFinite(price) || price < 0) throw new Error('سعر غير صالح');
-    if (!db.get('SELECT id FROM products WHERE id = ?', [productId])) throw new Error('منتج غير موجود في السلة');
-    return { productId, qty, price, buyPrice: Number(it.buyPrice) || 0, originalPrice: Number(it.originalPrice) || price };
+    const product = db.get('SELECT id, name, unit FROM products WHERE id = ?', [productId]);
+    if (!product) throw new Error('منتج غير موجود في السلة');
+    // The unit is read from the database, not the cart: a weight product with a
+    // fractional amount is fine, a piece product is not.
+    const unit = Units.unitOf(product);
+    const qty = Units.validateQty(it && it.qty, unit, product.name);
+    return { productId, qty, price, unit, buyPrice: Number(it.buyPrice) || 0, originalPrice: Number(it.originalPrice) || price };
   });
 
   // The money fields are recomputed from the lines so a renderer cannot post a
   // paid_amount that does not match the drawer entries it asks for.
-  const total = lines.reduce((s, l) => s + l.qty * l.price, 0);
-  const discount = Math.min(Math.max(Number(p.discount) || 0, 0), total);
-  const afterDiscount = Math.max(0, total - discount);
+  const total = Units.roundMoney(lines.reduce((s, l) => s + Units.roundMoney(l.qty * l.price), 0));
+  const discount = Units.roundMoney(Math.min(Math.max(Number(p.discount) || 0, 0), total));
+  const afterDiscount = Units.roundMoney(Math.max(0, total - discount));
 
   const DRAWER_BY_METHOD = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
   const breakdown = {};
@@ -617,10 +621,10 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
     if (!Number.isFinite(amount) || amount <= 0) continue;
     const drawerType = DRAWER_BY_METHOD[k] || k;
     if (!DRAWER_TYPES.includes(drawerType)) throw new Error('طريقة دفع غير معروفة: ' + k);
-    breakdown[k] = amount;
+    breakdown[k] = Units.roundMoney(amount);
   }
-  const paid = Math.min(Object.values(breakdown).reduce((s, v) => s + v, 0), afterDiscount);
-  const remaining = Math.max(0, afterDiscount - paid);
+  const paid = Math.min(Units.roundMoney(Object.values(breakdown).reduce((s, v) => s + v, 0)), afterDiscount);
+  const remaining = Units.roundMoney(Math.max(0, afterDiscount - paid));
   const method = Object.keys(breakdown).length
     ? Object.entries(breakdown).reduce((a, b) => (a[1] > b[1] ? a : b))[0]
     : 'cash';
@@ -641,12 +645,15 @@ ipcMain.handle('pos-create-sale', (_, payload) => {
     );
 
     for (const l of lines) {
+      const lineTotal = Units.roundMoney(l.qty * l.price);
       db.run('INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?,?,?,?,?,?,?)',
-        [sale.lastInsertRowid, l.productId, l.qty, l.price, l.qty * l.price, l.buyPrice, l.originalPrice]);
+        [sale.lastInsertRowid, l.productId, l.qty, l.price, lineTotal, l.buyPrice, l.originalPrice]);
       const link = containers.get(l.productId);
       // A container is stocked by its unit, so the unit is what moves.
       if (link) db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [l.qty * link.unitsPerContainer, link.unitId]);
-      else db.run('UPDATE products SET stock = stock - ? WHERE id = ?', [l.qty, l.productId]);
+      // Weight stock is stored as a real number; rounding at the column's
+      // precision keeps repeated sales from drifting to 4.999999999.
+      else db.run('UPDATE products SET stock = ROUND(stock - ?, 3) WHERE id = ?', [l.qty, l.productId]);
     }
     // Container stock is a reading of the unit stock, not an independent count.
     for (const [containerId, link] of containers) {
@@ -696,7 +703,8 @@ const resyncContainerStock = (containers) => {
 const moveReturnStock = (containers, productId, qty, delta) => {
   const link = containers.get(productId);
   if (link) db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [delta * qty * link.unitsPerContainer, link.unitId]);
-  else db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [delta * qty, productId]);
+  // Rounding keeps fractional weight stock from drifting over many returns.
+  else db.run('UPDATE products SET stock = ROUND(stock + ?, 3) WHERE id = ?', [delta * qty, productId]);
 };
 
 // Validates a return basket, works out the debt/cash split, and writes the
@@ -714,15 +722,16 @@ function buildReturnDocument(u, p) {
   const containers = returnContainerMap();
   const lines = raw.map((it) => {
     const productId = parseInt(it && it.productId, 10);
-    const qty = Number(it && it.qty);
     const price = Number(it && it.price);
     if (!Number.isInteger(productId) || productId <= 0) throw new Error('صنف غير صالح للإرجاع');
-    if (!Number.isFinite(qty) || qty <= 0) throw new Error('كمية غير صالحة');
     if (!Number.isFinite(price) || price < 0) throw new Error('سعر غير صالح');
-    if (!db.get('SELECT id FROM products WHERE id = ?', [productId])) throw new Error('منتج غير موجود');
-    return { productId, qty, price, amount: qty * price };
+    const product = db.get('SELECT id, name, unit FROM products WHERE id = ?', [productId]);
+    if (!product) throw new Error('منتج غير موجود');
+    const unit = Units.unitOf(product);
+    const qty = Units.validateQty(it && it.qty, unit, product.name);
+    return { productId, qty, price, unit, amount: Units.roundMoney(qty * price) };
   });
-  const total = lines.reduce((s, l) => s + l.amount, 0);
+  const total = Units.roundMoney(lines.reduce((s, l) => s + l.amount, 0));
 
   let sale = null;
   let purchase = null;
@@ -746,9 +755,10 @@ function buildReturnDocument(u, p) {
       for (const l of lines) {
         const sold = Number(db.get('SELECT COALESCE(SUM(quantity),0) q FROM sale_items WHERE sale_id = ? AND product_id = ?', [sid, l.productId]).q);
         const back = Number(db.get("SELECT COALESCE(SUM(quantity),0) q FROM returns WHERE (type='sale' OR type IS NULL) AND sale_id = ? AND product_id = ?", [sid, l.productId]).q);
-        if (l.qty > sold - back) {
-          const row = db.get('SELECT name FROM products WHERE id = ?', [l.productId]);
-          throw new Error(`الكمية غير كافية للإرجاع: ${row ? row.name : l.productId} (متاح ${sold - back})`);
+        if (l.qty > sold - back + 1e-9) {
+          const row = db.get('SELECT name, unit FROM products WHERE id = ?', [l.productId]);
+          const available = Units.fullQty(Math.max(0, sold - back), row && row.unit);
+          throw new Error(`الكمية غير كافية للإرجاع: ${row ? row.name : l.productId} (متاح ${available})`);
         }
       }
     } else if (destination === 'debt') {
@@ -772,8 +782,8 @@ function buildReturnDocument(u, p) {
     // Stock only: nothing is paid out and no balance is cleared.
   } else if (destination === 'debt') {
     const owed = Number((isPurchase ? purchase : sale).remaining_amount) || 0;
-    debtReduced = Math.max(0, Math.min(total, owed));
-    const rest = Math.round((total - debtReduced) * 100) / 100;
+    debtReduced = Units.roundMoney(Math.max(0, Math.min(total, owed)));
+    const rest = Units.roundMoney(total - debtReduced);
     if (rest > 0) { cashAmount = rest; cashPool = isPurchase ? 'treasury' : 'drawer'; }
   } else {
     cashAmount = total;
@@ -804,15 +814,15 @@ function buildReturnDocument(u, p) {
       );
       // The debt share stays on the line as well, so the per-line figures the
       // old rows carried keep their meaning.
-      const share = total > 0 ? debtReduced * (l.amount / total) : 0;
+      const share = total > 0 ? Units.roundMoney(debtReduced * (l.amount / total)) : 0;
       if (share > 0) db.run('UPDATE returns SET debt_reduced = ? WHERE id = ?', [share, row.lastInsertRowid]);
     }
     for (const l of lines) moveReturnStock(containers, l.productId, l.qty, stockDelta);
     resyncContainerStock(containers);
 
     if (debtReduced > 0) {
-      if (isPurchase) db.run('UPDATE purchases SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtReduced, purchase.id]);
-      else db.run('UPDATE sales SET remaining_amount = remaining_amount - ? WHERE id = ?', [debtReduced, sale.id]);
+      if (isPurchase) db.run('UPDATE purchases SET remaining_amount = ROUND(remaining_amount - ?, 2) WHERE id = ?', [debtReduced, purchase.id]);
+      else db.run('UPDATE sales SET remaining_amount = ROUND(remaining_amount - ?, 2) WHERE id = ?', [debtReduced, sale.id]);
     }
     if (cashAmount > 0) {
       // A customer return takes money out of the shop, a supplier return brings
@@ -846,8 +856,8 @@ function purgeReturnDocument(id, containers) {
 
   const debt = Number(doc.debt_reduced) || 0;
   if (debt > 0) {
-    if (isPurchase && doc.purchase_id) db.run('UPDATE purchases SET remaining_amount = remaining_amount + ? WHERE id = ?', [debt, doc.purchase_id]);
-    else if (!isPurchase && doc.sale_id) db.run('UPDATE sales SET remaining_amount = remaining_amount + ? WHERE id = ?', [debt, doc.sale_id]);
+    if (isPurchase && doc.purchase_id) db.run('UPDATE purchases SET remaining_amount = ROUND(remaining_amount + ?, 2) WHERE id = ?', [debt, doc.purchase_id]);
+    else if (!isPurchase && doc.sale_id) db.run('UPDATE sales SET remaining_amount = ROUND(remaining_amount + ?, 2) WHERE id = ?', [debt, doc.sale_id]);
   }
   deleteCashByReference('returndoc:' + id);
   // Documents folded in from the old per-line data still have their cash rows
@@ -962,7 +972,7 @@ ipcMain.handle('debt-settle', (_, party, payments, drawerBreakdown) => {
           [p.id, -p.amount, 'تسديد دين مباشر', u.id]);
       } else {
         const table = isCustomer ? 'sales' : 'purchases';
-        db.run(`UPDATE ${table} SET paid_amount = paid_amount + ?, remaining_amount = remaining_amount - ? WHERE id = ?`,
+        db.run(`UPDATE ${table} SET paid_amount = ROUND(paid_amount + ?, 2), remaining_amount = ROUND(remaining_amount - ?, 2) WHERE id = ?`,
           [p.amount, p.amount, p.id]);
       }
       applied++;
@@ -1226,7 +1236,7 @@ ipcMain.handle('invoice-cancel', (_, id) => {
       db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta * link.unitsPerContainer, link.unitId]);
       syncContainers(link.unitId);
     } else {
-      db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta, productId]);
+      db.run('UPDATE products SET stock = ROUND(stock + ?, 3) WHERE id = ?', [qtyDelta, productId]);
       syncContainers(productId);
     }
   }
@@ -1292,12 +1302,12 @@ ipcMain.handle('print-return', (_, docId) => {
   if (!doc) throw new Error('المرتجع مش موجود');
 
   const lines = db.all(
-    'SELECT r.product_id, r.quantity, r.amount, p.name AS product_name FROM returns r LEFT JOIN products p ON p.id = r.product_id WHERE r.document_id = ? ORDER BY r.id',
+    'SELECT r.product_id, r.quantity, r.amount, p.name AS product_name, p.unit FROM returns r LEFT JOIN products p ON p.id = r.product_id WHERE r.document_id = ? ORDER BY r.id',
     [id]);
   const items = lines.map(l => {
     const qty = Number(l.quantity) || 0;
     // amount is the line total, so the unit price has to come back out of it.
-    return { name: l.product_name || '-', qty, price: qty ? Number(l.amount) / qty : 0 };
+    return { name: l.product_name || '-', qty, unit: l.unit || 'قطعة', price: qty ? Units.roundMoney(Number(l.amount) / qty) : 0 };
   });
   const usr = doc.user_id ? db.get('SELECT full_name, username FROM users WHERE id = ?', [doc.user_id]) : null;
   const cashAmount = Number(doc.cash_amount) || 0;

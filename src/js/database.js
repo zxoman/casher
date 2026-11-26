@@ -58,7 +58,8 @@ function createTables() {
       min_stock INTEGER DEFAULT 5,
       description TEXT,
       image_path TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      unit TEXT DEFAULT 'قطعة'
     );
 
     CREATE TABLE IF NOT EXISTS customers (
@@ -330,19 +331,59 @@ function createTables() {
   try { db.exec("ALTER TABLE expenses ADD COLUMN drawer_type TEXT"); } catch(e) {}
   try { db.exec("ALTER TABLE products ADD COLUMN in_capital INTEGER DEFAULT 1"); } catch(e) {}
   try { db.exec("ALTER TABLE customers ADD COLUMN archived INTEGER DEFAULT 0"); } catch(e) {}
-  // Remove UNIQUE constraint from products.barcode for existing databases
+  // Remove UNIQUE constraint from products.barcode for existing databases.
+  // The copy is by explicit column list, not SELECT *: the table gains columns
+  // over time (min_sell_price, in_capital, unit, ...), and a fixed products_new
+  // made SELECT * fail as soon as products had more of them. That failure was
+  // swallowed, so the UNIQUE constraint was never actually removed. Building
+  // the copy from the columns that exist keeps the rebuild working on every
+  // version of the table.
   try {
     const hasUnique = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='products' AND sql LIKE '%barcode TEXT UNIQUE%'").get();
     if (hasUnique) {
+      const existing = new Set(db.prepare("PRAGMA table_info(products)").all().map(c => c.name));
+      const columns = [
+        'id INTEGER PRIMARY KEY AUTOINCREMENT',
+        'barcode TEXT',
+        'name TEXT NOT NULL',
+        'category_id INTEGER',
+        'subcategory_id INTEGER',
+        'size TEXT',
+        'color TEXT',
+        'buy_price REAL DEFAULT 0',
+        'sell_price REAL DEFAULT 0',
+        'wholesale_price REAL DEFAULT 0',
+        'stock INTEGER DEFAULT 0',
+        'min_stock INTEGER DEFAULT 5',
+        'description TEXT',
+        'image_path TEXT',
+        'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+        'extra_sizes TEXT',
+        'stock_m INTEGER DEFAULT 0',
+        'stock_l INTEGER DEFAULT 0',
+        'stock_xl INTEGER DEFAULT 0',
+        'stock_xxl INTEGER DEFAULT 0',
+        'stock_xxxl INTEGER DEFAULT 0',
+        'min_sell_price REAL DEFAULT 0',
+        'in_capital INTEGER DEFAULT 1',
+        "unit TEXT DEFAULT 'قطعة'"
+      ];
+      const names = columns.map(c => c.split(' ')[0]);
+      const copy = names.filter(n => existing.has(n));
       db.exec("PRAGMA foreign_keys=OFF");
       db.exec("DROP TABLE IF EXISTS products_new");
-      db.exec("CREATE TABLE products_new (id INTEGER PRIMARY KEY AUTOINCREMENT, barcode TEXT, name TEXT NOT NULL, category_id INTEGER, subcategory_id INTEGER, size TEXT, color TEXT, buy_price REAL DEFAULT 0, sell_price REAL DEFAULT 0, wholesale_price REAL DEFAULT 0, stock INTEGER DEFAULT 0, min_stock INTEGER DEFAULT 5, description TEXT, image_path TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, extra_sizes TEXT, stock_m INTEGER DEFAULT 0, stock_l INTEGER DEFAULT 0, stock_xl INTEGER DEFAULT 0, stock_xxl INTEGER DEFAULT 0, stock_xxxl INTEGER DEFAULT 0)");
-      db.exec("INSERT INTO products_new SELECT * FROM products");
+      db.exec(`CREATE TABLE products_new (${columns.join(', ')})`);
+      db.exec(`INSERT INTO products_new (${copy.join(', ')}) SELECT ${copy.join(', ')} FROM products`);
       db.exec("DROP TABLE products");
       db.exec("ALTER TABLE products_new RENAME TO products");
       db.exec("PRAGMA foreign_keys=ON");
     }
   } catch(e) {}
+  // The unit a product is sold and stocked in. This runs after the barcode
+  // rebuild above, which recreates the table without this column; adding it
+  // first would mean the rebuild drops it. Existing rows default to piece and
+  // keep behaving exactly as before.
+  try { db.exec("ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'قطعة'"); } catch(e) {}
   // Indexes for the invoice list. Without these the two per-row summary
   // subqueries in invoices.html were a full scan of sale_items for every sale
   // (O(sales x items)): 10k invoices x 40k items took ~40s. sale_items.sale_id

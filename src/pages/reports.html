@@ -67,6 +67,7 @@
       <div id="purchasesDetailContainer"></div>
     </main>
   </div>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -229,12 +230,13 @@
     async function loadStockReport() {
       const products = await window.api.db.all("SELECT * FROM products ORDER BY name ASC");
       document.getElementById('reportTitle').textContent = 'تقرير المخزون';
-      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>المخزون</th><th>الحد الأدنى</th><th>الحالة</th></tr>';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>الوحدة</th><th>المخزون</th><th>الحد الأدنى</th><th>الحالة</th></tr>';
       document.getElementById('reportBody').innerHTML = products.map(p => {
         const low = p.stock <= p.min_stock;
         return `<tr><td>${p.name}</td>
-          <td style="color:${low?'var(--danger)':'inherit'}">${p.stock||0}</td>
-          <td>${p.min_stock}</td>
+          <td>${Units.normalizeUnit(p.unit)}</td>
+          <td style="color:${low?'var(--danger)':'inherit'}">${Units.fullQty(p.stock || 0, p.unit)}</td>
+          <td>${Units.fullQty(p.min_stock, p.unit)}</td>
           <td>${low ? '⚠️ منخفض' : '✅ متوفر'}</td></tr>`;
       }).join('');
       const low = products.filter(p => p.stock <= p.min_stock);
@@ -246,14 +248,15 @@
     async function loadLowStockReport() {
       const products = await window.api.db.all("SELECT * FROM products WHERE stock <= min_stock ORDER BY stock ASC");
       document.getElementById('reportTitle').textContent = 'تقرير المخزون المنخفض';
-      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>المخزون</th><th>الحد الأدنى</th><th>العجز</th></tr>';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>الوحدة</th><th>المخزون</th><th>الحد الأدنى</th><th>العجز</th></tr>';
       document.getElementById('reportBody').innerHTML = products.map(p => {
         const deficit = p.min_stock - p.stock;
         return `<tr><td>${p.name}</td>
-          <td style="color:var(--danger)">${p.stock||0}</td>
-          <td>${p.min_stock}</td>
-          <td style="color:var(--danger);font-weight:700">${deficit > 0 ? deficit : 0}</td></tr>`;
-      }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">لا توجد منتجات منخفضة المخزون</td></tr>';
+          <td>${Units.normalizeUnit(p.unit)}</td>
+          <td style="color:var(--danger)">${Units.fullQty(p.stock || 0, p.unit)}</td>
+          <td>${Units.fullQty(p.min_stock, p.unit)}</td>
+          <td style="color:var(--danger);font-weight:700">${deficit > 0 ? Units.fullQty(deficit, p.unit) : 0}</td></tr>`;
+      }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">لا توجد منتجات منخفضة المخزون</td></tr>';
       document.getElementById('reportCards').innerHTML = `<div class="card"><h3>المنتجات المنخفضة</h3><div class="value red">${products.length}</div></div>`;
       document.getElementById('topProductsCard').innerHTML = '';
       if (window.chart) window.chart.destroy();
@@ -261,10 +264,10 @@
 
     async function loadProductReport(from, to, productId) {
       document.getElementById('reportTitle').textContent = `تقرير المنتجات من ${from} إلى ${to}`;
-      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>التصنيف</th><th>الباركود</th><th>المخزون</th><th>سعر الشراء</th><th>سعر البيع</th><th>قيمة المخزون</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th><th>الربح</th></tr>';
+      document.getElementById('reportHeaders').innerHTML = '<tr><th>المنتج</th><th>الوحدة</th><th>التصنيف</th><th>الباركود</th><th>المخزون</th><th>سعر الشراء</th><th>سعر البيع</th><th>قيمة المخزون</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th><th>الربح</th></tr>';
 
       let productSql = `
-        SELECT p.id, p.name, p.barcode, p.stock, p.buy_price, p.sell_price, p.min_sell_price,
+        SELECT p.id, p.name, p.barcode, p.stock, p.buy_price, p.sell_price, p.min_sell_price, p.unit,
                c.name as category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
@@ -309,22 +312,31 @@
         totalProfit += sd.profit;
         return `<tr>
           <td style="font-weight:700">${p.name}</td>
+          <td>${Units.normalizeUnit(p.unit)}</td>
           <td>${p.category_name || '-'}</td>
           <td>${p.barcode || '-'}</td>
-          <td>${p.stock || 0}</td>
+          <td>${Units.fullQty(p.stock || 0, p.unit)}</td>
           <td>${Number(p.buy_price || 0).toLocaleString()}</td>
           <td>${Number(p.sell_price || 0).toLocaleString()}</td>
           <td>${Number(stockValue).toLocaleString()}</td>
-          <td>${sd.sold_qty}</td>
+          <td>${Units.fullQty(sd.sold_qty, p.unit)}</td>
           <td style="color:var(--success)">${Number(sd.sold_total).toLocaleString()}</td>
           <td style="color:${sd.profit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${Number(sd.profit).toLocaleString()}</td>
         </tr>`;
-      }).join('') || '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">لا توجد منتجات</td></tr>';
+      }).join('') || '<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">لا توجد منتجات</td></tr>';
 
+      // Pieces and kilograms cannot be added into one meaningful total, so the
+      // card only shows a number when every product shares one unit.
+      const unitSet = new Set(products.map(p => Units.normalizeUnit(p.unit)));
+      const soldCard = !products.length
+        ? '0'
+        : unitSet.size === 1
+          ? Units.fullQty(totalSoldQty, products[0] && products[0].unit)
+          : 'وحدات مختلفة';
       document.getElementById('reportCards').innerHTML = `
         <div class="card"><h3>📦 عدد المنتجات</h3><div class="value blue">${products.length}</div></div>
-        <div class="card"><h3>💰 قيمة المخزون</h3><div class="value">${Number(totalStockValue).toLocaleString()}</div></div>
-        <div class="card"><h3>🛒 الكمية المباعة</h3><div class="value green">${totalSoldQty}</div></div>
+        <div class="card"><h3>💰 قيمة المخزون</h3><div class="value">${Units.roundMoney(totalStockValue).toLocaleString()}</div></div>
+        <div class="card"><h3>🛒 الكمية المباعة</h3><div class="value green">${soldCard}</div></div>
         <div class="card"><h3>💵 إجمالي المبيعات</h3><div class="value green">${Number(totalSoldAmount).toLocaleString()}</div></div>
         <div class="card"><h3>📈 الربح</h3><div class="value ${totalProfit >= 0 ? 'green' : 'red'}">${Number(totalProfit).toLocaleString()}</div></div>
       `;
@@ -333,8 +345,8 @@
     }
 
     async function loadTopProducts() {
-      const top = await window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 10");
-      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+      const top = await window.api.db.all("SELECT p.name, p.unit, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 10");
+      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${Units.fullQty(t.qty, t.unit)}</td></tr>`).join('') + '</table>';
     }
 
     async function loadCashReport(from, to) {
@@ -381,7 +393,7 @@
         window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM sales WHERE remaining_amount>0"),
         window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM customer_debt_entries"),
         window.api.db.get("SELECT COALESCE(SUM(remaining_amount),0) as t FROM purchases WHERE remaining_amount>0"),
-        window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 5"),
+        window.api.db.all("SELECT p.name, p.unit, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 5"),
         window.api.db.get("SELECT COALESCE(SUM(si.quantity * COALESCE(NULLIF(si.buy_price, 0), p.buy_price)),0) as total FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE date(s.created_at) BETWEEN ? AND ?", [from, to]),
         window.api.db.get("SELECT COALESCE(SUM(amount),0) as t FROM returns WHERE date(created_at) BETWEEN ? AND ? AND (type IS NULL OR type='sale')", [from, to]),
         window.api.db.get("SELECT COALESCE(SUM(r.quantity * COALESCE(p.buy_price, 0)), 0) as t FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE date(r.created_at) BETWEEN ? AND ? AND (r.type IS NULL OR r.type='sale')", [from, to]),
@@ -437,7 +449,7 @@
         const ids = purchasesDetail.map(p => p.id);
         const placeholders = ids.map(() => '?').join(',');
         purchaseItems = await window.api.db.all(
-          `SELECT pi.*, p.name as product_name, p.stock,
+          `SELECT pi.*, p.name as product_name, p.stock, p.unit,
             (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si
              JOIN sales s ON si.sale_id = s.id
              WHERE si.product_id = pi.product_id
@@ -503,9 +515,9 @@
                         <tr>
                           <td style="padding:4px 10px;font-size:13px;">${item.product_name}</td>
                           <td style="padding:4px 10px;font-size:13px;">${Number(item.buy_price).toLocaleString()}</td>
-                          <td style="padding:4px 10px;font-size:13px;">${item.quantity}</td>
-                          <td style="padding:4px 10px;font-size:13px;color:${item.sold_qty > 0 ? 'var(--success)' : 'var(--text-muted)'}">${item.sold_qty}</td>
-                          <td style="padding:4px 10px;font-size:13px;color:${item.stock > (item.quantity * 0.2) ? 'var(--success)' : 'var(--danger)'}">${item.stock}</td>
+                          <td style="padding:4px 10px;font-size:13px;">${Units.fullQty(item.quantity, item.unit)}</td>
+                          <td style="padding:4px 10px;font-size:13px;color:${item.sold_qty > 0 ? 'var(--success)' : 'var(--text-muted)'}">${Units.fullQty(item.sold_qty, item.unit)}</td>
+                          <td style="padding:4px 10px;font-size:13px;color:${item.stock > (item.quantity * 0.2) ? 'var(--success)' : 'var(--danger)'}">${Units.fullQty(item.stock, item.unit)}</td>
                         </tr>`).join('')}</tbody>
                     </table>
                   </td>
@@ -515,7 +527,7 @@
         </div>` : '<div style="margin-top:16px;"><p style="color:var(--text-muted)">📦 لا توجد مشتريات في هذه الفترة</p></div>';
 
       document.getElementById('topProductsCard').innerHTML = '<h3>أفضل 5 منتجات مبيعاً</h3><table>' +
-        topProducts.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+        topProducts.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${Units.fullQty(t.qty, t.unit)}</td></tr>`).join('') + '</table>';
 
       updateChart('bar',
         ['صافي المبيعات', 'المرتجعات', 'الخصم', 'صافي التكلفة', 'مشتريات الفترة', 'مصروفات الفترة', 'ديون الفترة', 'الربح', 'صافي الربح'],
@@ -596,9 +608,9 @@
     }
 
     async function loadCategoryTopProducts(catId, from, to) {
-      const top = await window.api.db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ? GROUP BY si.product_id ORDER BY qty DESC LIMIT 5", [catId, from, to]);
+      const top = await window.api.db.all("SELECT p.name, p.unit, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id JOIN sales s ON si.sale_id = s.id WHERE p.category_id = ? AND date(s.created_at) BETWEEN ? AND ? GROUP BY si.product_id ORDER BY qty DESC LIMIT 5", [catId, from, to]);
       if (top.length === 0) return '<p style="color:var(--text-muted)">لا توجد مبيعات</p>';
-      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${t.qty}</td></tr>`).join('') + '</table>';
+      return '<table>' + top.map(t => `<tr><td>${t.name}</td><td style="font-weight:700">${Units.fullQty(t.qty, t.unit)}</td></tr>`).join('') + '</table>';
     }
 
     async function loadDebtsReport() {

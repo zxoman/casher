@@ -1,4 +1,5 @@
 const db = require('../database');
+const Units = require('../units');
 
 let bot = null;
 let isEnabled = false;
@@ -42,12 +43,12 @@ function initialize() {
 
     bot.onText(/\/stock/, async (msg) => {
       if (!isAuthorized(msg.chat.id)) return;
-      const low = await db.all("SELECT name, stock FROM products WHERE stock <= min_stock ORDER BY name ASC LIMIT 10");
+      const low = await db.all("SELECT name, stock, unit FROM products WHERE stock <= min_stock ORDER BY name ASC LIMIT 10");
       const now = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       if (low.length === 0) {
         bot.sendMessage(msg.chat.id, `✅ المخزون جيد - ${now}، لا توجد منتجات منخفضة`);
       } else {
-        const list = low.map(p => `- ${p.name}: المخزون ${p.stock||0}`).join('\n');
+        const list = low.map(p => `- ${p.name}: المخزون ${Units.fullQty(p.stock || 0, p.unit)}`).join('\n');
         bot.sendMessage(msg.chat.id, `⚠️ منتجات منخفضة المخزون - ${now}:\n${list}`);
       }
     });
@@ -145,8 +146,8 @@ function initialize() {
       const drawerBal = (drawerCash?.balance||0) + (drawerVf?.balance||0) + (drawerIp?.balance||0);
       const netProfit = profitData.profit - expensesData.t - returnsData.t + returnsCost.t;
 
-      const topProducts = await db.all("SELECT p.name, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 5");
-      const topList = topProducts.map(t => `• ${t.name}: ${t.qty}`).join('\n');
+      const topProducts = await db.all("SELECT p.name, p.unit, SUM(si.quantity) as qty FROM sale_items si JOIN products p ON si.product_id = p.id GROUP BY si.product_id ORDER BY qty DESC LIMIT 5");
+      const topList = topProducts.map(t => `• ${t.name}: ${Units.fullQty(t.qty, t.unit)}`).join('\n');
 
       const msgText = `📊 التقرير العام - ${periodLabel}\n${dateStr}
 

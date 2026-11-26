@@ -108,6 +108,7 @@
     <div class="foot" id="footLine"></div>
   </div>
 
+  <script src="./js/units.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
     const n = (k, d) => params.get(k) === null ? d : params.get(k);
@@ -147,12 +148,17 @@
       return `<tr>
         <td class="num">${i + 1}</td>
         <td>${it.name || '-'}</td>
-        <td class="num">${it.qty}</td>
+        <td class="num">${Units.fullQty(it.qty, it.unit)}</td>
         <td class="num">${fmt(it.price)}</td>
         <td class="num">${fmt(amount)}</td>
       </tr>`;
     }).join('');
-    document.getElementById('qtyTotal').textContent = qty;
+    // Summing kilograms and pieces produces a number with no meaning, so the
+    // total only appears when every line shares one unit.
+    const unitSet = new Set(items.map(it => Units.normalizeUnit(it.unit)));
+    document.getElementById('qtyTotal').textContent = unitSet.size === 1
+      ? Units.fullQty(qty, items[0] && items[0].unit)
+      : `${items.length} صنف`;
 
     const pool = n('pool', '');
     const poolLabel = pool === 'drawer' ? 'الدرج' : pool === 'treasury' ? 'الخزينة' : '';

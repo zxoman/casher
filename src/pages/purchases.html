@@ -51,7 +51,7 @@
             <input type="hidden" id="purProductId">
             <div id="purProductSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:2px solid #ccc;border-radius:8px;max-height:200px;overflow-y:auto;z-index:100;box-shadow:0 6px 16px rgba(0,0,0,0.2);"></div>
           </div>
-          <div class="form-group"><label>الكمية</label><input type="number" id="purQty" value="1" min="1" style="width:70px"></div>
+          <div class="form-group"><label>الكمية <span id="purQtyUnit" style="font-size:11px;color:var(--text-secondary);"></span></label><input type="number" id="purQty" value="1" min="1" step="1" style="width:80px"></div>
           <div class="form-group"><label>السعر</label>
             <input type="number" id="purPrice" placeholder="سعر الشراء" step="0.01">
             <span style="font-size:11px;color:var(--text-secondary);" id="purPriceHint"></span>
@@ -66,7 +66,7 @@
         <div class="form-row">
           <div style="display:flex;gap:8px;align-items:center;">
             <div class="form-group" style="flex:1;"><label>الإجمالي</label><input type="number" id="purTotal" readonly></div>
-            <div class="form-group" style="flex:1;"><label>عدد القطع</label><input type="text" id="purItemCount" readonly value="0" style="font-weight:700;"></div>
+            <div class="form-group" style="flex:1;"><label>إجمالي الكمية</label><input type="text" id="purItemCount" readonly value="0" style="font-weight:700;"></div>
           </div>
           <div class="form-group"><label>المدفوع</label><input type="number" id="purPaid" value="0"></div>
           <div class="form-group"><label>جهة الدفع</label><select id="purPaymentSource" onchange="togglePurDrawerType()">
@@ -86,6 +86,7 @@
       </form>
     </div>
   </div>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -121,7 +122,7 @@
         await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta * link.unitsPerContainer, link.unitId]);
         await syncPurchaseContainerStock(link.unitId);
       } else {
-        await window.api.db.run('UPDATE products SET stock = stock + ? WHERE id = ?', [qtyDelta, productId]);
+        await window.api.db.run('UPDATE products SET stock = ROUND(stock + ?, 3) WHERE id = ?', [qtyDelta, productId]);
         await syncPurchaseContainerStock(productId);
       }
     }
@@ -141,17 +142,24 @@
         return;
       }
       container.innerHTML = filtered.map(p =>
-        `<div data-id="${p.id}" data-price="${p.buy_price}" data-name="${p.name.replace(/"/g,'&quot;')}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #000;font-size:13px;color:#000;font-weight: 1000;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''" onclick="selectPurchaseProduct(this)">${p.name} — ${Number(p.buy_price).toLocaleString()} <span style="font-size:11px;color:var(--text-secondary)">📦 ${p.stock||0}</span> ${p.barcode ? '('+p.barcode+')' : ''}</div>`
+        `<div data-id="${p.id}" data-price="${p.buy_price}" data-name="${p.name.replace(/"/g,'&quot;')}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #000;font-size:13px;color:#000;font-weight: 1000;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''" onclick="selectPurchaseProduct(this)">${p.name} — ${Number(p.buy_price).toLocaleString()}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''} <span style="font-size:11px;color:var(--text-secondary)">📦 ${Units.fullQty(p.stock, p.unit)}</span> ${p.barcode ? '('+p.barcode+')' : ''}</div>`
       ).join('');
       container.style.display = 'block';
     }
 
     function selectPurchaseProductEl(p) {
+      const full = allPurchaseProducts.find(x => x.id === p.id) || p;
+      const unit = Units.unitOf(full);
       document.getElementById('purProductId').value = p.id;
       document.getElementById('purProductInput').value = p.name;
       document.getElementById('purPrice').value = p.buy_price || '';
       document.getElementById('purPriceHint').textContent = p.buy_price ? `(آخر سعر: ${Number(p.buy_price).toLocaleString()})` : '';
-      document.getElementById('purQty').focus();
+      const qtyEl = document.getElementById('purQty');
+      qtyEl.step = Units.qtyStep(unit);
+      qtyEl.min = Units.minQty(unit);
+      qtyEl.value = 1;
+      document.getElementById('purQtyUnit').textContent = Units.isWeightUnit(unit) ? `(${unit})` : '';
+      qtyEl.focus();
     }
 
     function selectPurchaseProduct(el) {
@@ -195,6 +203,11 @@
       document.getElementById('purchaseForm').reset();
       document.getElementById('purchaseItemsList').innerHTML = '';
       document.getElementById('purTotal').value = 0;
+      // A reset does not clear the step/min left over from a previous weight
+      // product, so put the quantity field back to whole pieces.
+      document.getElementById('purQty').step = 1;
+      document.getElementById('purQty').min = 1;
+      document.getElementById('purQtyUnit').textContent = '';
       document.getElementById('purchaseModal').style.display = 'flex';
       document.querySelector('#purchaseModal h2').textContent = 'فاتورة شراء جديدة';
       document.querySelector('#purchaseModal button[type="submit"]').textContent = 'حفظ الفاتورة';
@@ -223,6 +236,7 @@
         const itemData = {
           product_id: item.product_id,
           name: prod ? prod.name : 'منتج',
+          unit: Units.unitOf(prod),
           qty: item.quantity,
           price: item.buy_price,
           total: item.total
@@ -255,17 +269,24 @@
 
     function addPurchaseItem() {
       const prodId = parseInt(document.getElementById('purProductId').value);
-      const qty = parseInt(document.getElementById('purQty').value) || 1;
       const price = parseFloat(document.getElementById('purPrice').value) || 0;
       const prodName = document.getElementById('purProductInput').value.trim();
+      const prod = allPurchaseProducts.find(x => x.id === prodId);
+      const name = prod ? prod.name : prodName;
 
       if (!prodId || !prodName) { window.showAlert('اختر منتج', 'error'); return; }
-      if (qty <= 0) { window.showAlert('الكمية يجب أن تكون أكبر من 0', 'error'); return; }
-      purchaseItems.push({ product_id: prodId, name: prodName, qty, price, total: qty * price });
+      const unit = Units.unitOf(prod);
+      let qty;
+      try { qty = Units.validateQty(document.getElementById('purQty').value, unit, name); }
+      catch (err) { window.showAlert(err.message, 'error'); return; }
+      purchaseItems.push({ product_id: prodId, name, unit, qty, price, total: Units.roundMoney(qty * price) });
       renderPurchaseItems();
       document.getElementById('purProductInput').value = '';
       document.getElementById('purProductId').value = '';
       document.getElementById('purQty').value = 1;
+      document.getElementById('purQty').step = 1;
+      document.getElementById('purQty').min = 1;
+      document.getElementById('purQtyUnit').textContent = '';
       document.getElementById('purPrice').value = '';
       document.getElementById('purPriceHint').textContent = '';
       document.getElementById('purProductInput').focus();
@@ -274,13 +295,20 @@
     function renderPurchaseItems() {
       const tbody = document.getElementById('purchaseItemsList');
       tbody.innerHTML = purchaseItems.map((item, i) => {
-        return `<tr><td>${item.name}</td><td>${item.qty}</td><td>${item.total}</td>
+        return `<tr><td>${item.name}</td><td>${Units.fullQty(item.qty, item.unit)}</td><td>${Units.formatMoney(item.total)}</td>
           <td><button type="button" class="btn btn-sm btn-danger" onclick="removePurchaseItem(${i})">✕</button></td></tr>`;
       }).join('');
-      const total = purchaseItems.reduce((s, x) => s + x.total, 0);
+      const total = Units.roundMoney(purchaseItems.reduce((s, x) => s + x.total, 0));
       const count = purchaseItems.reduce((s, x) => s + x.qty, 0);
       document.getElementById('purTotal').value = total;
-      document.getElementById('purItemCount').value = count;
+      // Adding kilos to pieces gives a number with no meaning, so a mixed
+      // basket is described by its line count instead.
+      const units = new Set(purchaseItems.map(x => Units.normalizeUnit(x.unit)));
+      document.getElementById('purItemCount').value = !purchaseItems.length
+        ? '0'
+        : units.size === 1
+          ? Units.fullQty(Units.roundQty(count, [...units][0]), [...units][0])
+          : `${purchaseItems.length} صنف`;
     }
 
     function removePurchaseItem(i) { purchaseItems.splice(i, 1); renderPurchaseItems(); }
@@ -291,9 +319,9 @@
       if (purchaseItems.length === 0) { window.showAlert('أضف منتجات على الأقل', 'error'); return; }
       const supplierId = document.getElementById('purSupplier').value || null;
       const invoiceNum = document.getElementById('purInvoice').value || ('PUR-' + Date.now());
-      const total = purchaseItems.reduce((s, x) => s + x.total, 0);
-      const paid = parseFloat(document.getElementById('purPaid').value) || 0;
-      const remaining = total - paid;
+      const total = Units.roundMoney(purchaseItems.reduce((s, x) => s + x.total, 0));
+      const paid = Units.roundMoney(parseFloat(document.getElementById('purPaid').value) || 0);
+      const remaining = Units.roundMoney(total - paid);
       const paymentSource = document.getElementById('purPaymentSource').value;
       const drawerType = document.getElementById('purDrawerType').value;
 
@@ -317,15 +345,19 @@
         const oldMap = {};
         for (const o of oldPurchaseItems) oldMap[o.product_id] = o;
         for (const item of purchaseItems) {
-          const oldQty = (oldMap[item.product_id] && oldMap[item.product_id].qty) || 0;
-          const increase = item.qty - oldQty;
-          if (increase > 0) extraCost += increase * item.price;
+          const old = oldMap[item.product_id];
+          // Lines that were not on the invoice are counted once below; counting
+          // them here as well would deduct their cost twice.
+          if (!old) continue;
+          const increase = item.qty - old.qty;
+          if (increase > 0) extraCost += Units.roundMoney(increase * item.price);
         }
         // New items not in old
         const oldIds = new Set(oldPurchaseItems.map(o => o.product_id));
         for (const item of purchaseItems) {
-          if (!oldIds.has(item.product_id)) extraCost += item.qty * item.price;
+          if (!oldIds.has(item.product_id)) extraCost += Units.roundMoney(item.qty * item.price);
         }
+        extraCost = Units.roundMoney(extraCost);
 
         // Deduct extra cost from treasury (as user requested: من الخزنه)
         if (extraCost > 0) {

@@ -109,6 +109,7 @@
   </div>
 
   <script src="../js/pager.js"></script>
+  <script src="../js/units.js"></script>
   <script>
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user) { window.location.href = 'login.html'; throw new Error('login required'); }
@@ -138,7 +139,7 @@
         await window.api.db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [qtyDelta * link.unitsPerContainer, link.unitId]);
         await syncInvoiceContainerStock(link.unitId);
       } else {
-        await window.api.db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [qtyDelta, productId]);
+        await window.api.db.run("UPDATE products SET stock = ROUND(stock + ?, 3) WHERE id = ?", [qtyDelta, productId]);
         await syncInvoiceContainerStock(productId);
       }
     }
@@ -171,7 +172,7 @@
       // The item summary/count used to be two correlated subqueries, which made
       // SQLite re-scan sale_items once per invoice. One grouped join does the
       // whole table in a single pass instead.
-      const AGG = `LEFT JOIN (SELECT si.sale_id, GROUP_CONCAT(p.name || ' x' || si.quantity, '، ') AS products_summary, COUNT(*) AS items_count FROM sale_items si LEFT JOIN products p ON si.product_id = p.id GROUP BY si.sale_id) agg ON agg.sale_id = s.id`;
+      const AGG = `LEFT JOIN (SELECT si.sale_id, GROUP_CONCAT(p.name || ' x' || ROUND(si.quantity, 3) || CASE WHEN p.unit IS NOT NULL AND p.unit <> 'قطعة' THEN ' ' || p.unit ELSE '' END, '، ') AS products_summary, COUNT(*) AS items_count FROM sale_items si LEFT JOIN products p ON si.product_id = p.id GROUP BY si.sale_id) agg ON agg.sale_id = s.id`;
       let where = ``;
       const params = [];
       if (catId) {
@@ -239,8 +240,8 @@
     async function showInvoice(id) {
       const sale = await window.api.db.get("SELECT s.*, c.name AS customer_name, c.phone AS customer_phone FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE s.id=?", [id]);
       if (!sale) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
-      const items = await window.api.db.all("SELECT si.*, p.name AS product_name FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
-      const returns = await window.api.db.all("SELECT r.*, p.name AS product_name FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE r.sale_id=?", [id]);
+      const items = await window.api.db.all("SELECT si.*, p.name AS product_name, p.unit FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
+      const returns = await window.api.db.all("SELECT r.*, p.name AS product_name, p.unit FROM returns r LEFT JOIN products p ON r.product_id = p.id WHERE r.sale_id=?", [id]);
 
       const allCustomers = await window.api.db.all("SELECT * FROM customers WHERE COALESCE(archived,0)=0 OR id=? ORDER BY name", [sale.customer_id || -1]);
       window._editingSale = { id: sale.id, items: items.map(i => ({ ...i, _qty: i.quantity, _price: i.price })), invoice: sale.invoice_number, origTotal: sale.total_amount, discount: sale.discount || 0, paid: sale.paid_amount || 0, method: sale.payment_method, customerId: sale.customer_id, customerName: sale.customer_name, customerPhone: sale.customer_phone, createdAt: sale.created_at, remaining_amount: sale.remaining_amount, payment_breakdown: sale.payment_breakdown };
@@ -277,8 +278,8 @@
         const orig = i.original_price && Number(i.original_price) !== Number(i.price);
         const origCell = orig ? `<span style="color:var(--text-secondary);font-size:11px;text-decoration:line-through">${Number(i.original_price).toLocaleString()}</span><span style="color:var(--danger);font-weight:700"> ${Number(i.price).toLocaleString()}</span>` : `<span style="color:var(--text-secondary)">${Number(i.price).toLocaleString()}</span>`;
         html += `<tr>
-          <td style="font-weight:700">${i.product_name || '-'}</td>
-          <td style="width:60px"><input type="number" class="inv-item-qty" value="${i.quantity}" min="1" data-idx="${idx}" data-itemid="${i.id}" oninput="onInvItemChange(${sale.id}, this)" style="width:50px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center"></td>
+          <td style="font-weight:700">${i.product_name || '-'}${Units.isWeightUnit(i.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${i.unit})</span>` : ''}</td>
+          <td style="width:70px"><input type="number" class="inv-item-qty" value="${Units.roundQty(i.quantity, i.unit)}" min="${Units.minQty(i.unit)}" step="${Units.qtyStep(i.unit)}" data-idx="${idx}" data-itemid="${i.id}" oninput="onInvItemChange(${sale.id}, this)" style="width:60px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center"></td>
           <td style="width:80px"><input type="number" class="inv-item-price" value="${i.price}" step="0.01" min="0" data-idx="${idx}" data-itemid="${i.id}" oninput="onInvItemChange(${sale.id}, this)" style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center"></td>
           <td style="white-space:nowrap">${origCell}</td>
           <td style="font-weight:700"><span class="inv-item-total">${Number(i.total).toLocaleString()}</span></td>
@@ -293,7 +294,7 @@
       if (returns.length > 0) {
         html += `<h4 style="margin-top:12px">المرتجعات</h4><table style="font-size:12px"><thead><tr><th>المنتج</th><th>الكمية</th><th>القيمة</th><th>الوجهة</th></tr></thead><tbody>`;
         returns.forEach(r => {
-          html += `<tr><td>${r.product_name || '-'}</td><td>${r.quantity}</td><td style="color:var(--danger)">${Number(r.amount).toLocaleString()}</td><td>${r.destination === 'مصنع' ? '🏭 مصنع' : '📦 مخزون'}</td></tr>`;
+          html += `<tr><td>${r.product_name || '-'}</td><td>${Units.fullQty(r.quantity, r.unit)}</td><td style="color:var(--danger)">${Number(r.amount).toLocaleString()}</td><td>${r.destination === 'مصنع' ? '🏭 مصنع' : '📦 مخزون'}</td></tr>`;
         });
         html += `</tbody></table>`;
       }
@@ -315,7 +316,7 @@
         const newQty = typeof item._qty === 'number' ? item._qty : item.quantity;
         const newPrice = typeof item._price === 'number' ? item._price : item.price;
         if (newQty !== item.quantity || newPrice !== item.price) {
-          const newTotal = newQty * newPrice;
+          const newTotal = Units.roundMoney(newQty * newPrice);
           await adjustInvoiceStock(item.product_id, item.quantity);
           await adjustInvoiceStock(item.product_id, -newQty);
           await window.api.db.run("UPDATE sale_items SET quantity=?, price=?, total=? WHERE id=?", [newQty, newPrice, newTotal, item.id]);
@@ -333,9 +334,13 @@
     function onInvItemChange(saleId, input) {
       const idx = parseInt(input.dataset.idx);
       const row = input.closest('tr');
-      const qty = parseInt(row.querySelector('.inv-item-qty').value) || 1;
+      const stored = window._editingSale && window._editingSale.items[idx];
+      const unit = Units.unitOf(stored);
+      let qty = Units.roundQty(parseFloat(row.querySelector('.inv-item-qty').value), unit);
+      if (!Number.isFinite(qty) || qty <= 0) qty = Units.minQty(unit);
+      if (Units.isPiece(unit)) qty = Math.round(qty);
       const price = parseFloat(row.querySelector('.inv-item-price').value) || 0;
-      const total = qty * price;
+      const total = Units.roundMoney(qty * price);
       row.querySelector('.inv-item-total').textContent = total.toLocaleString();
       // Update stored data
       if (window._editingSale && window._editingSale.items[idx]) {
@@ -347,14 +352,14 @@
 
     function updateInvTotals() {
       if (!window._editingSale) return;
-      const total = window._editingSale.items.reduce((sum, i) => {
+      const total = Units.roundMoney(window._editingSale.items.reduce((sum, i) => {
         const qty = typeof i._qty === 'number' ? i._qty : i.quantity;
         const price = typeof i._price === 'number' ? i._price : i.price;
         return sum + (qty * price);
-      }, 0);
-      const discount = parseFloat(document.getElementById('editInvDiscount').value) || 0;
-      const paid = parseFloat(document.getElementById('editInvPaid').value) || 0;
-      const remaining = Math.max(0, total - discount - paid);
+      }, 0));
+      const discount = Units.roundMoney(parseFloat(document.getElementById('editInvDiscount').value) || 0);
+      const paid = Units.roundMoney(parseFloat(document.getElementById('editInvPaid').value) || 0);
+      const remaining = Units.roundMoney(Math.max(0, total - discount - paid));
       document.getElementById('editInvTotal').textContent = total.toLocaleString();
       const remEl = document.getElementById('editInvRemaining');
       remEl.textContent = remaining.toLocaleString();
@@ -382,7 +387,7 @@
       if (positive.length > 1) {
         const total = positive.reduce((a, [, v]) => a + v, 0);
         for (const [k, v] of positive) {
-          await window.api.cash.addDrawerEntry(dtMap[k] || k, (v / total) * amount, reason);
+          await window.api.cash.addDrawerEntry(dtMap[k] || k, Units.roundMoney((v / total) * amount), reason);
         }
       } else if (positive.length === 1) {
         await window.api.cash.addDrawerEntry(dtMap[positive[0][0]] || positive[0][0], amount, reason);
@@ -395,27 +400,27 @@
       const ctx = window._editingSale;
       if (!ctx) return;
 
-      const discount = parseFloat(document.getElementById('editInvDiscount').value) || 0;
-      const paid = parseFloat(document.getElementById('editInvPaid').value) || 0;
+      const discount = Units.roundMoney(parseFloat(document.getElementById('editInvDiscount').value) || 0);
+      const paid = Units.roundMoney(parseFloat(document.getElementById('editInvPaid').value) || 0);
       const method = document.getElementById('editInvMethod').value;
       const customerId = document.getElementById('editInvCustomer').value || null;
 
       // Calculate new total from items (using inputs)
-      const newTotal = ctx.items.reduce((sum, i) => {
+      const newTotal = Units.roundMoney(ctx.items.reduce((sum, i) => {
         const qty = typeof i._qty === 'number' ? i._qty : i.quantity;
         const price = typeof i._price === 'number' ? i._price : i.price;
         return sum + (qty * price);
-      }, 0);
+      }, 0));
 
       const reasons = [];
 
       for (const item of ctx.items) {
         const newQty = typeof item._qty === 'number' ? item._qty : item.quantity;
         const newPrice = typeof item._price === 'number' ? item._price : item.price;
-        const newLineTotal = newQty * newPrice;
+        const newLineTotal = Units.roundMoney(newQty * newPrice);
 
         if (newQty !== item.quantity || newPrice !== item.price) {
-          const oldTotal = item.quantity * item.price;
+          const oldTotal = Units.roundMoney(item.quantity * item.price);
           const diff = newLineTotal - oldTotal;
 
           // Update stock: restore old, deduct new
@@ -431,7 +436,7 @@
       }
 
       // Reconcile paid against the new due (total - discount)
-      const newDue = newTotal - discount;
+      const newDue = Units.roundMoney(newTotal - discount);
       const wasCapped = paid > newDue;
       const effectivePaid = Math.min(paid, newDue);
       const paidDiff = effectivePaid - ctx.paid;
@@ -444,12 +449,12 @@
       }
 
       // Handle discount change
-      const discDiff = discount - ctx.discount;
+      const discDiff = Units.roundMoney(discount - ctx.discount);
       if (discDiff > 0) reasons.push(`زيادة خصم ${discDiff.toLocaleString()}`);
       else if (discDiff < 0) reasons.push(`تخفيض خصم ${Math.abs(discDiff).toLocaleString()}`);
 
       // Update sale
-      const remaining = Math.max(0, newDue - effectivePaid);
+      const remaining = Units.roundMoney(Math.max(0, newDue - effectivePaid));
       await window.api.db.run("UPDATE sales SET total_amount=?, discount=?, paid_amount=?, remaining_amount=?, payment_method=?, customer_id=? WHERE id=?", [newTotal, discount, effectivePaid, remaining, method, customerId, ctx.id]);
 
       // Book cash adjustment: drawer if same day, treasury otherwise
@@ -503,7 +508,7 @@
       const filtered = _addItemProducts.filter(p => p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
       if (!filtered.length) { container.style.display = 'block'; container.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-secondary)">لا توجد نتائج</div>'; return; }
       container.style.display = 'block';
-      container.innerHTML = filtered.map(p => `<div class="add-item-suggestion" data-id="${p.id}" data-name="${p.name}" data-price="${p.sell_price}" data-stock="${p.stock||0}" onclick="selectAddItemProduct(this)" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()} — 📦 ${p.stock||0}</span></div>`).join('');
+      container.innerHTML = filtered.map(p => `<div class="add-item-suggestion" data-id="${p.id}" data-name="${p.name}" data-price="${p.sell_price}" data-stock="${p.stock||0}" onclick="selectAddItemProduct(this)" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;transition:background .15s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''"><span>${p.name}${Units.isWeightUnit(p.unit) ? ` <span style="font-size:11px;color:var(--text-secondary);">(${p.unit})</span>` : ''}</span><span style="color:var(--text-secondary);font-size:12px">${Number(p.sell_price).toLocaleString()}${Units.isWeightUnit(p.unit) ? ' / ' + p.unit : ''} — 📦 ${Units.fullQty(p.stock||0, p.unit)}</span></div>`).join('');
     }
 
     function quickAddItemProduct() {
@@ -530,47 +535,65 @@
       document.getElementById('addItemSearch').value = name;
       document.getElementById('addItemSuggestions').style.display = 'none';
       document.getElementById('addItemPrice').value = price;
+      const prod = _addItemProducts.find(p => p.id === id);
+      const unit = Units.unitOf(prod);
+      const qtyEl = document.getElementById('addItemQty');
+      if (qtyEl) {
+        qtyEl.step = Units.qtyStep(unit);
+        qtyEl.min = Units.minQty(unit);
+        qtyEl.value = 1;
+      }
       updateAddItemInfo();
     }
 
     function updateAddItemInfo() {
-      const qty = parseInt(document.getElementById('addItemQty').value) || 0;
-      const price = parseFloat(document.getElementById('addItemPrice').value);
       if (!_addItemSelectedId) { document.getElementById('addItemInfo').innerHTML = '👆 ابحث واختر منتجاً'; return; }
-      if (!price) { document.getElementById('addItemInfo').innerHTML = '⚠️ أدخل السعر'; return; }
       const prod = _addItemProducts.find(p => p.id === _addItemSelectedId);
-      const total = qty * price;
+      const unit = Units.unitOf(prod);
+      const price = parseFloat(document.getElementById('addItemPrice').value);
+      if (!price) { document.getElementById('addItemInfo').innerHTML = '⚠️ أدخل السعر'; return; }
+      // Validate here too, so the preview never shows a rounded quantity that
+      // the confirm step would then reject (a piece product cannot be 2.5).
+      let qty;
+      try { qty = Units.validateQty(document.getElementById('addItemQty').value, unit, prod && prod.name); }
+      catch (err) {
+        document.getElementById('addItemInfo').innerHTML = `<span style="color:var(--danger)">⚠️ ${err.message}</span>`;
+        return;
+      }
+      const total = Units.roundMoney(qty * price);
       document.getElementById('addItemInfo').innerHTML = `
         <strong>${prod ? prod.name : ''}</strong><br>
-        الكمية: ${qty} | السعر: ${Number(price).toLocaleString()}<br>
+        الكمية: ${Units.fullQty(qty, unit)} | السعر: ${Number(price).toLocaleString()}<br>
         الإجمالي: <strong>${Number(total).toLocaleString()}</strong><br>
-        <span style="color:${qty > (prod ? prod.stock||0 : 0) ? 'var(--danger)' : 'var(--success)'}">المخزون المتاح: ${prod ? prod.stock||0 : 0}</span>
+        <span style="color:${qty > (prod ? prod.stock||0 : 0) ? 'var(--danger)' : 'var(--success)'}">المخزون المتاح: ${Units.fullQty(prod ? prod.stock||0 : 0, unit)}</span>
       `;
     }
 
     async function confirmAddItemToInvoice(saleId) {
       const productId = _addItemSelectedId;
       if (!productId) { window.showAlert('ابحث واختر منتجاً أولاً', 'error'); return; }
-      const qty = parseInt(document.getElementById('addItemQty').value) || 0;
+      const prod = _addItemProducts.find(p => p.id === productId);
+      if (!prod) { window.showAlert('المنتج غير موجود', 'error'); return; }
+      let qty;
+      try { qty = Units.validateQty(document.getElementById('addItemQty').value, Units.unitOf(prod), prod.name); }
+      catch (err) { window.showAlert(err.message, 'error'); return; }
       if (qty <= 0) { window.showAlert('الكمية غير صالحة', 'error'); return; }
       const price = parseFloat(document.getElementById('addItemPrice').value);
       if (!price || price <= 0) { window.showAlert('السعر غير صالح', 'error'); return; }
-      const prod = _addItemProducts.find(p => p.id === productId);
-      if (!prod) { window.showAlert('المنتج غير موجود', 'error'); return; }
       if ((prod.stock || 0) < qty) { window.showAlert('الكمية غير متوفرة في المخزون', 'error'); return; }
 
       // Flush pending inline edits first
       await flushPendingItemChanges();
 
       await adjustInvoiceStock(productId, -qty);
-      const total = qty * price;
+      const total = Units.roundMoney(qty * price);
       await window.api.db.run("INSERT INTO sale_items (sale_id, product_id, quantity, price, total, buy_price, original_price) VALUES (?,?,?,?,?,?,?)", [saleId, productId, qty, price, total, prod.buy_price || 0, prod.sell_price || price]);
 
       // Update sale total
       const sumItems = await window.api.db.get("SELECT SUM(total) AS sum FROM sale_items WHERE sale_id=?", [saleId]);
-      const newTotal = sumItems.sum || 0;
+      const newTotal = Units.roundMoney(sumItems.sum || 0);
       const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [saleId]);
-      const newRemaining = Math.max(0, newTotal - (sale.discount || 0) - sale.paid_amount);
+      const newRemaining = Units.roundMoney(Math.max(0, newTotal - (sale.discount || 0) - sale.paid_amount));
       await window.api.db.run("UPDATE sales SET total_amount=?, remaining_amount=? WHERE id=?", [newTotal, newRemaining, saleId]);
 
       document.getElementById('addItemModal').style.display = 'none';
@@ -598,20 +621,20 @@
 
       // Recalculate sale total and adjust paid proportionally
       const sumItems = await window.api.db.get("SELECT SUM(total) AS sum FROM sale_items WHERE sale_id=?", [saleId]);
-      const newTotal = sumItems.sum || 0;
+      const newTotal = Units.roundMoney(sumItems.sum || 0);
       const oldEffectiveTotal = sale.total_amount - (sale.discount || 0);
       let newPaid = sale.paid_amount;
       let drawerAdjust = 0;
       if (oldEffectiveTotal > 0) {
         const ratio = item.total / oldEffectiveTotal;
-        const paidToReduce = Math.min(sale.paid_amount * ratio, sale.paid_amount);
-        newPaid = Math.max(0, sale.paid_amount - paidToReduce);
-        drawerAdjust = -paidToReduce;
+        const paidToReduce = Units.roundMoney(Math.min(sale.paid_amount * ratio, sale.paid_amount));
+        newPaid = Units.roundMoney(Math.max(0, sale.paid_amount - paidToReduce));
+        drawerAdjust = Units.roundMoney(-paidToReduce);
       }
       if (drawerAdjust !== 0) {
         await bookInvoiceAdjustment(sale, drawerAdjust, 'حذف منتج من فاتورة ' + sale.invoice_number + ' - إلغاء جزء من المدفوع', user.id);
       }
-      const newRemaining = Math.max(0, newTotal - (sale.discount || 0) - newPaid);
+      const newRemaining = Units.roundMoney(Math.max(0, newTotal - (sale.discount || 0) - newPaid));
       await window.api.db.run("UPDATE sales SET total_amount=?, paid_amount=?, remaining_amount=? WHERE id=?", [newTotal, newPaid, newRemaining, saleId]);
 
       showInvoice(saleId);
@@ -649,20 +672,20 @@
       const sale = await window.api.db.get("SELECT * FROM sales WHERE id=?", [id]);
       if (!sale) return;
       const customerId = document.getElementById('editCustomer').value || null;
-      const discount = parseFloat(document.getElementById('editDiscount').value) || 0;
+      const discount = Units.roundMoney(parseFloat(document.getElementById('editDiscount').value) || 0);
       const method = document.getElementById('editMethod').value;
-      const paid = parseFloat(document.getElementById('editPaid').value) || 0;
+      const paid = Units.roundMoney(parseFloat(document.getElementById('editPaid').value) || 0);
       const total = window._editSaleTotal;
-      const newDue = total - discount;
-      const effectivePaid = Math.min(paid, newDue);
-      const paidDiff = effectivePaid - (sale.paid_amount || 0);
-      const remaining = Math.max(0, newDue - effectivePaid);
+      const newDue = Units.roundMoney(total - discount);
+      const effectivePaid = Units.roundMoney(Math.min(paid, newDue));
+      const paidDiff = Units.roundMoney(effectivePaid - (sale.paid_amount || 0));
+      const remaining = Units.roundMoney(Math.max(0, newDue - effectivePaid));
       await window.api.db.run('UPDATE sales SET customer_id=?, discount=?, paid_amount=?, remaining_amount=?, payment_method=? WHERE id=?', [customerId, discount, effectivePaid, remaining, method, id]);
       if (paidDiff !== 0) {
         const reasons = [];
         if (paidDiff > 0) reasons.push(`إضافة مدفوع ${paidDiff.toLocaleString()}`);
         else if (paidDiff < 0) reasons.push(`تخفيض مدفوع ${Math.abs(paidDiff).toLocaleString()}`);
-        const discDiff = discount - (sale.discount || 0);
+        const discDiff = Units.roundMoney(discount - (sale.discount || 0));
         if (discDiff > 0) reasons.push(`زيادة خصم ${discDiff.toLocaleString()}`);
         else if (discDiff < 0) reasons.push(`تخفيض خصم ${Math.abs(discDiff).toLocaleString()}`);
         await bookInvoiceAdjustment(sale, paidDiff, 'تعديل فاتورة ' + sale.invoice_number + (reasons.length ? ' - ' + reasons.join(', ') : ''), user.id);
@@ -675,9 +698,9 @@
     async function printInvoice(id) {
       const sale = await window.api.db.get("SELECT s.*, c.name AS customer_name FROM sales s LEFT JOIN customers c ON s.customer_id = c.id WHERE s.id=?", [id]);
       if (!sale) { window.showAlert('الفاتورة غير موجودة', 'error'); return; }
-      const items = await window.api.db.all("SELECT si.*, p.name AS product_name, p.barcode FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
+      const items = await window.api.db.all("SELECT si.*, p.name AS product_name, p.barcode, p.unit FROM sale_items si LEFT JOIN products p ON si.product_id = p.id WHERE si.sale_id=?", [id]);
       const barcode = items.map(i => i.barcode).filter(Boolean).join(', ');
-      const cartItems = items.map(i => ({ name: i.product_name || '-', qty: i.quantity, price: i.price, total: i.total, size: i.size || '' }));
+      const cartItems = items.map(i => ({ name: i.product_name || '-', qty: i.quantity, unit: i.unit || 'قطعة', price: i.price, total: i.total, size: i.size || '' }));
       const methodLabels = { cash: 'نقدي', vodafone: 'فودافون كاش', instapay: 'انستاباي' };
       const pb = sale.payment_breakdown ? JSON.parse(sale.payment_breakdown) : null;
       let methodStr;
